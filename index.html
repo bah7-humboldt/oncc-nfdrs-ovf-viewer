@@ -1,0 +1,633 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NFDRS Observed vs Forecast (Interactive)</title>
+<!-- Served over real https:// (GitHub Pages) or http://localhost (local testing), NEVER
+     file:// -- so plain fetch() of sibling JSON files works normally here, unlike
+     danger_map_viewer.html/wfas_compare_viewer.html which inline their manifest to work
+     around file://'s fetch() block. See scripts/nfdrs_ovf_web_export.py's own docstring for
+     the output layout this fetches: gaccs.json, <gacc>/manifest.json, <gacc>/data/<YYYY-MM>.json. -->
+<style>
+  :root {
+    --bg: #eef1f0; --surface: #ffffff; --surface-2: #e2e6e4; --surface-3: #d5dad7;
+    --border: #c7cdc9; --text: #1b201e; --text-dim: #5c655f;
+    --accent: #2a78d6; --accent-ink: #ffffff; --accent-soft: #d7e6f8; --focus: #1b6de0;
+    --fill: #2a78d6; --fill-light: #9ec5f4; --zero-line: #e34948;
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #12161a; --surface: #191f24; --surface-2: #212830; --surface-3: #2a323b;
+      --border: #333d47; --text: #e8ecef; --text-dim: #8b98a3;
+      --accent: #6fa8ff; --accent-ink: #0b1520; --accent-soft: #23354d; --focus: #6fa8ff;
+      --fill: #6fa8ff; --fill-light: #2d4970; --zero-line: #ff6b68;
+      color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #12161a; --surface: #191f24; --surface-2: #212830; --surface-3: #2a323b;
+    --border: #333d47; --text: #e8ecef; --text-dim: #8b98a3;
+    --accent: #6fa8ff; --accent-ink: #0b1520; --accent-soft: #23354d; --focus: #6fa8ff;
+    --fill: #6fa8ff; --fill-light: #2d4970; --zero-line: #ff6b68;
+    color-scheme: dark;
+  }
+  :root[data-theme="light"] {
+    --bg: #eef1f0; --surface: #ffffff; --surface-2: #e2e6e4; --surface-3: #d5dad7;
+    --border: #c7cdc9; --text: #1b201e; --text-dim: #5c655f;
+    --accent: #2a78d6; --accent-ink: #ffffff; --accent-soft: #d7e6f8; --focus: #1b6de0;
+    --fill: #2a78d6; --fill-light: #9ec5f4; --zero-line: #e34948;
+    color-scheme: light;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .mono { font-family: ui-monospace, "SF Mono", "Cascadia Mono", "Roboto Mono", Consolas, monospace; }
+  .page { max-width: 1200px; margin: 0 auto; padding: 14px; }
+
+  .brand { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
+  .brand-mark {
+    font-family: ui-monospace, "SF Mono", "Cascadia Mono", "Roboto Mono", Consolas, monospace;
+    font-size: 11px; font-weight: 700; letter-spacing: 0.06em;
+    background: var(--accent); color: var(--accent-ink); padding: 3px 6px; border-radius: 3px; line-height: 1;
+  }
+  .brand h1 { margin: 0; font-size: 16px; font-weight: 650; letter-spacing: -0.01em; }
+  .brand .sub { font-size: 11.5px; color: var(--text-dim); margin-left: 4px; }
+
+  .controls {
+    display: flex; flex-wrap: wrap; gap: 12px 16px;
+    background: var(--surface); border: 1px solid var(--border); border-radius: 6px;
+    padding: 12px; margin-bottom: 12px;
+  }
+  .field { display: flex; flex-direction: column; gap: 4px; }
+  .fieldLabel {
+    font-size: 9.5px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase;
+    color: var(--text-dim);
+  }
+  select, input[type="date"] {
+    font: inherit; font-size: 12.5px; color: var(--text); background: var(--surface-2);
+    border: 1px solid var(--border); border-radius: 4px; padding: 5px 8px;
+  }
+  select[multiple] { min-width: 190px; height: 96px; }
+  .pillRow { display: flex; gap: 6px; flex-wrap: wrap; max-width: 320px; }
+  .pill {
+    appearance: none; border: 1px solid var(--border); background: var(--surface-2);
+    color: var(--text); font: inherit; font-size: 12px; font-weight: 550;
+    padding: 5px 10px; border-radius: 999px; cursor: pointer;
+  }
+  .pill:hover { border-color: var(--text-dim); }
+  .pill[aria-selected="true"] { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+  .dateRow { display: flex; align-items: center; gap: 6px; }
+  .dateRow span { color: var(--text-dim); font-size: 12px; }
+
+  .panels { display: flex; gap: 12px; flex-wrap: wrap; }
+  .panel {
+    flex: 1 1 460px; min-width: 0; background: var(--surface); border: 1px solid var(--border);
+    border-radius: 6px; overflow: hidden;
+  }
+  .panelHead { padding: 8px 12px; border-bottom: 1px solid var(--border); background: var(--surface-2); }
+  .panelTitle { font-size: 12.5px; font-weight: 700; letter-spacing: 0.01em; }
+  .panelSub { font-size: 10.5px; color: var(--text-dim); margin-top: 1px; }
+  .panelBody { padding: 8px; }
+  .panelBody svg { width: 100%; height: auto; display: block; }
+  .panelEmpty { font-size: 13px; color: var(--text-dim); text-align: center; padding: 40px 12px; }
+
+  .statusBar { font-size: 11px; color: var(--text-dim); margin: 8px 2px 0; }
+  .loadstate { font-size: 13px; color: var(--text-dim); text-align: center; padding: 40px; }
+
+  svg text { fill: var(--text-dim); font-family: inherit; }
+  .axisLine { stroke: var(--border); stroke-width: 1; }
+  .gridLine { stroke: var(--border); stroke-width: 0.7; opacity: 0.6; }
+  .zeroLine { stroke: var(--zero-line); stroke-width: 1.5; }
+  .box { fill: var(--fill-light); fill-opacity: 0.55; stroke: var(--fill); stroke-width: 1.4; }
+  .whisker { stroke: var(--fill); stroke-width: 1.2; }
+  .median { stroke: var(--fill); stroke-width: 2; }
+  .outlier { fill: none; stroke: var(--fill); stroke-width: 1; }
+  .dailyPoint { fill: var(--fill-light); }
+  .dailyLine { stroke: var(--fill-light); stroke-width: 1.2; fill: none; }
+  .rollLine { stroke: var(--fill); stroke-width: 2; fill: none; }
+
+  @media (max-width: 760px) {
+    .panels { flex-direction: column; }
+    select[multiple] { min-width: 0; width: 100%; }
+  }
+</style>
+</head>
+<body>
+  <div class="page">
+    <div class="brand"><span class="brand-mark">OVF</span><h1>NFDRS Observed vs Forecast</h1>
+      <span class="sub" id="issuedSub"></span></div>
+
+    <div id="loadState" class="loadstate">Loading&hellip;</div>
+
+    <div id="console" hidden>
+      <div class="controls">
+        <div class="field">
+          <span class="fieldLabel">FDRA</span>
+          <select id="fdraSelect"></select>
+        </div>
+        <div class="field">
+          <span class="fieldLabel">Stations (blank = all in FDRA)</span>
+          <select id="stationSelect" multiple></select>
+        </div>
+        <div class="field">
+          <span class="fieldLabel">Index</span>
+          <div class="pillRow" id="indexPills" role="tablist" aria-label="Index"></div>
+        </div>
+        <div class="field">
+          <span class="fieldLabel">Trend lead time</span>
+          <select id="leadSelect"></select>
+        </div>
+        <div class="field">
+          <span class="fieldLabel">Date range</span>
+          <div class="dateRow">
+            <input type="date" id="startDate"><span>&ndash;</span><input type="date" id="endDate">
+          </div>
+        </div>
+      </div>
+
+      <div class="panels">
+        <div class="panel">
+          <div class="panelHead">
+            <div class="panelTitle">By Forecast Lead Time</div>
+            <div class="panelSub" id="panelASub">all stations in view</div>
+          </div>
+          <div class="panelBody" id="panelABody"><div class="panelEmpty" id="panelAEmpty">No data for this selection.</div></div>
+        </div>
+        <div class="panel">
+          <div class="panelHead">
+            <div class="panelTitle">Trend Over Time</div>
+            <div class="panelSub" id="panelCSub"></div>
+          </div>
+          <div class="panelBody" id="panelCBody"><div class="panelEmpty" id="panelCEmpty">No data for this selection.</div></div>
+        </div>
+      </div>
+
+      <div class="statusBar" id="statusBar"></div>
+    </div>
+  </div>
+
+<script>
+(function () {
+  "use strict";
+
+  var TREND_ROLLING_WINDOW_DAYS = 7; // matches scripts/nfdrs_ovf_analysis.py's own constant
+
+  var els = {
+    loadState: document.getElementById("loadState"),
+    consoleEl: document.getElementById("console"),
+    issuedSub: document.getElementById("issuedSub"),
+    fdraSelect: document.getElementById("fdraSelect"),
+    stationSelect: document.getElementById("stationSelect"),
+    indexPills: document.getElementById("indexPills"),
+    leadSelect: document.getElementById("leadSelect"),
+    startDate: document.getElementById("startDate"),
+    endDate: document.getElementById("endDate"),
+    panelASub: document.getElementById("panelASub"),
+    panelABody: document.getElementById("panelABody"),
+    panelAEmpty: document.getElementById("panelAEmpty"),
+    panelCSub: document.getElementById("panelCSub"),
+    panelCBody: document.getElementById("panelCBody"),
+    panelCEmpty: document.getElementById("panelCEmpty"),
+    statusBar: document.getElementById("statusBar"),
+  };
+
+  var manifest = null;
+  var gacc = null;
+  var chunkCache = {}; // "YYYY-MM" -> parsed chunk (or null while a fetch is pending -- see ensureChunksLoaded)
+  var state = { fdra: null, index: null, leadTime: null };
+
+  // ---- date helpers -------------------------------------------------------
+  function pad2(n) { return n < 10 ? "0" + n : String(n); }
+  function isoFromMonthDay(month, day) { return month + "-" + pad2(day); }
+  function monthKey(d) { return d.getFullYear() + "-" + pad2(d.getMonth() + 1); }
+  function monthsBetween(startIso, endIso) {
+    var out = [];
+    var cur = new Date(startIso + "T00:00:00Z");
+    var end = new Date(endIso + "T00:00:00Z");
+    cur = new Date(Date.UTC(cur.getUTCFullYear(), cur.getUTCMonth(), 1));
+    while (cur <= end) {
+      out.push(cur.getUTCFullYear() + "-" + pad2(cur.getUTCMonth() + 1));
+      cur = new Date(Date.UTC(cur.getUTCFullYear(), cur.getUTCMonth() + 1, 1));
+    }
+    return out;
+  }
+
+  // ---- data loading ---------------------------------------------------------
+  function ensureChunksLoaded(months) {
+    var need = months.filter(function (m) { return !(m in chunkCache); });
+    return Promise.all(need.map(function (m) {
+      return fetch(gacc + "/data/" + m + ".json").then(function (r) {
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        return r.json();
+      }).then(function (chunk) {
+        chunkCache[m] = chunk;
+      }).catch(function (err) {
+        console.warn("Could not load month chunk " + m + ": " + err.message);
+        chunkCache[m] = { columns: [], rows: [] }; // cache the failure so we don't refetch every render
+      });
+    }));
+  }
+
+  function decodeChunk(chunk) {
+    var idx = {};
+    chunk.columns.forEach(function (c, i) { idx[c] = i; });
+    return { idx: idx, rows: chunk.rows };
+  }
+
+  // Returns filtered {date, station_id, lead_time_days, diff} records for the current
+  // fdra/station/index selection across the given cached months -- direct JS port of
+  // nfdrs_ovf_analysis.py's build_fdra_index_data(): skips a row if EITHER side of the
+  // SELECTED index is null, but never touches other indices' values (those live in other
+  // columns of the same row and are simply not read here).
+  function filteredDiffs(months, startIso, endIso) {
+    var out = [];
+    if (!state.index) return out;
+    var fCol = "f_" + state.index, oCol = "o_" + state.index;
+    var stationFilter = getSelectedStations(); // null = no filter (all stations in fdra)
+
+    months.forEach(function (m) {
+      var chunk = chunkCache[m];
+      if (!chunk || !chunk.rows || !chunk.rows.length) return;
+      var d = decodeChunk(chunk);
+      var iFdra = d.idx.fdra, iStation = d.idx.station_id, iDay = d.idx.day, iLead = d.idx.lead_time_days;
+      var iF = d.idx[fCol], iO = d.idx[oCol];
+      if (iF === undefined || iO === undefined) return;
+
+      d.rows.forEach(function (row) {
+        if (state.fdra !== "__ALL__" && row[iFdra] !== state.fdra) return;
+        if (stationFilter && stationFilter.indexOf(row[iStation]) === -1) return;
+        var dateIso = isoFromMonthDay(chunk.month, row[iDay]);
+        if (dateIso < startIso || dateIso > endIso) return;
+        var fVal = row[iF], oVal = row[iO];
+        if (fVal === null || oVal === null) return;
+        out.push({ date: dateIso, station_id: row[iStation], lead_time_days: row[iLead], diff: oVal - fVal });
+      });
+    });
+    return out;
+  }
+
+  function getSelectedStations() {
+    var opts = Array.prototype.filter.call(els.stationSelect.options, function (o) { return o.selected; });
+    if (!opts.length) return null; // nothing explicitly picked = "all stations in this FDRA"
+    return opts.map(function (o) { return o.value; });
+  }
+
+  // ---- stats (matches matplotlib's default boxplot: linear-interpolation percentiles,
+  // whis=1.5 Tukey whiskers) --------------------------------------------------
+  function percentile(sortedVals, p) {
+    var n = sortedVals.length;
+    if (n === 1) return sortedVals[0];
+    var rank = (p / 100) * (n - 1);
+    var lo = Math.floor(rank), hi = Math.ceil(rank);
+    if (lo === hi) return sortedVals[lo];
+    return sortedVals[lo] + (sortedVals[hi] - sortedVals[lo]) * (rank - lo);
+  }
+
+  function boxStats(values) {
+    if (!values.length) return null;
+    var sorted = values.slice().sort(function (a, b) { return a - b; });
+    var q1 = percentile(sorted, 25), median = percentile(sorted, 50), q3 = percentile(sorted, 75);
+    var iqr = q3 - q1;
+    var loFence = q1 - 1.5 * iqr, hiFence = q3 + 1.5 * iqr;
+    var inRange = sorted.filter(function (v) { return v >= loFence && v <= hiFence; });
+    var whiskerLo = inRange.length ? inRange[0] : sorted[0];
+    var whiskerHi = inRange.length ? inRange[inRange.length - 1] : sorted[sorted.length - 1];
+    var outliers = sorted.filter(function (v) { return v < whiskerLo || v > whiskerHi; });
+    return { n: sorted.length, q1: q1, median: median, q3: q3, whiskerLo: whiskerLo, whiskerHi: whiskerHi, outliers: outliers };
+  }
+
+  // Trailing REAL-CALENDAR-DAYS rolling mean over (date, value) pairs already sorted by
+  // date -- same window semantics as nfdrs_ovf_analysis.py's own rolling_mean() (a gap
+  // doesn't shrink the averaging window's real time span).
+  function rollingMean(dates, values, windowDays) {
+    var out = [];
+    for (var i = 0; i < dates.length; i++) {
+      var windowStart = addDays(dates[i], -(windowDays - 1));
+      var sum = 0, count = 0;
+      for (var j = 0; j <= i; j++) {
+        if (dates[j] >= windowStart) { sum += values[j]; count++; }
+      }
+      out.push(sum / count);
+    }
+    return out;
+  }
+  function addDays(iso, n) {
+    var d = new Date(iso + "T00:00:00Z");
+    d.setUTCDate(d.getUTCDate() + n);
+    return d.getUTCFullYear() + "-" + pad2(d.getUTCMonth() + 1) + "-" + pad2(d.getUTCDate());
+  }
+
+  // ---- SVG rendering ----------------------------------------------------
+  var SVG_NS = "http://www.w3.org/2000/svg";
+  function svgEl(tag, attrs) {
+    var el = document.createElementNS(SVG_NS, tag);
+    for (var k in attrs) el.setAttribute(k, attrs[k]);
+    return el;
+  }
+
+  function renderBoxPlot(container, groups, yLabel) {
+    container.innerHTML = "";
+    var W = 620, H = 300, padL = 46, padR = 14, padT = 10, padB = 30;
+    var plotW = W - padL - padR, plotH = H - padT - padB;
+
+    var allVals = [];
+    groups.forEach(function (g) {
+      if (!g.stats) return;
+      allVals.push(g.stats.whiskerLo, g.stats.whiskerHi);
+      allVals = allVals.concat(g.stats.outliers);
+    });
+    allVals.push(0);
+    var yMin = Math.min.apply(null, allVals), yMax = Math.max.apply(null, allVals);
+    var yPad = (yMax - yMin) * 0.08 || 1;
+    yMin -= yPad; yMax += yPad;
+    function yPix(v) { return padT + plotH * (1 - (v - yMin) / (yMax - yMin)); }
+
+    var svg = svgEl("svg", { viewBox: "0 0 " + W + " " + H });
+
+    // gridlines + axis
+    var ticks = niceTicks(yMin, yMax, 5);
+    ticks.forEach(function (t) {
+      var y = yPix(t);
+      svg.appendChild(svgEl("line", { x1: padL, x2: W - padR, y1: y, y2: y, class: "gridLine" }));
+      var lbl = svgEl("text", { x: padL - 6, y: y + 3, "text-anchor": "end", "font-size": "9.5" });
+      lbl.textContent = t;
+      svg.appendChild(lbl);
+    });
+    svg.appendChild(svgEl("line", { x1: padL, x2: padL, y1: padT, y2: H - padB, class: "axisLine" }));
+    svg.appendChild(svgEl("line", { x1: padL, x2: W - padR, y1: yPix(0), y2: yPix(0), class: "zeroLine" }));
+
+    var slot = plotW / groups.length;
+    var boxW = Math.min(34, slot * 0.5);
+    groups.forEach(function (g, i) {
+      var cx = padL + slot * (i + 0.5);
+      var lbl = svgEl("text", { x: cx, y: H - padB + 14, "text-anchor": "middle", "font-size": "10" });
+      lbl.textContent = g.label;
+      svg.appendChild(lbl);
+      if (!g.stats) return;
+      var s = g.stats;
+      var title = g.label + ": n=" + s.n + " median=" + s.median.toFixed(2) +
+        " Q1=" + s.q1.toFixed(2) + " Q3=" + s.q3.toFixed(2);
+
+      var gEl = svgEl("g", {});
+      gEl.appendChild(svgEl("title", {})).textContent = title;
+      gEl.appendChild(svgEl("line", { x1: cx, x2: cx, y1: yPix(s.whiskerHi), y2: yPix(s.q3), class: "whisker" }));
+      gEl.appendChild(svgEl("line", { x1: cx, x2: cx, y1: yPix(s.q1), y2: yPix(s.whiskerLo), class: "whisker" }));
+      gEl.appendChild(svgEl("rect", {
+        x: cx - boxW / 2, width: boxW, y: yPix(s.q3), height: Math.max(1, yPix(s.q1) - yPix(s.q3)), class: "box",
+      }));
+      gEl.appendChild(svgEl("line", {
+        x1: cx - boxW / 2, x2: cx + boxW / 2, y1: yPix(s.median), y2: yPix(s.median), class: "median",
+      }));
+      s.outliers.forEach(function (v) {
+        gEl.appendChild(svgEl("circle", { cx: cx, cy: yPix(v), r: 2.4, class: "outlier" }));
+      });
+      svg.appendChild(gEl);
+    });
+
+    container.appendChild(svg);
+  }
+
+  function renderTrend(container, dates, dailyMeans, rolled) {
+    container.innerHTML = "";
+    var W = 620, H = 300, padL = 46, padR = 14, padT = 10, padB = 30;
+    var plotW = W - padL - padR, plotH = H - padT - padB;
+
+    var allVals = dailyMeans.concat(rolled, [0]);
+    var yMin = Math.min.apply(null, allVals), yMax = Math.max.apply(null, allVals);
+    var yPad = (yMax - yMin) * 0.1 || 1;
+    yMin -= yPad; yMax += yPad;
+    function yPix(v) { return padT + plotH * (1 - (v - yMin) / (yMax - yMin)); }
+    function xPix(i) { return dates.length <= 1 ? padL + plotW / 2 : padL + plotW * (i / (dates.length - 1)); }
+
+    var svg = svgEl("svg", { viewBox: "0 0 " + W + " " + H });
+    var ticks = niceTicks(yMin, yMax, 5);
+    ticks.forEach(function (t) {
+      var y = yPix(t);
+      svg.appendChild(svgEl("line", { x1: padL, x2: W - padR, y1: y, y2: y, class: "gridLine" }));
+      var lbl = svgEl("text", { x: padL - 6, y: y + 3, "text-anchor": "end", "font-size": "9.5" });
+      lbl.textContent = t;
+      svg.appendChild(lbl);
+    });
+    svg.appendChild(svgEl("line", { x1: padL, x2: padL, y1: padT, y2: H - padB, class: "axisLine" }));
+    svg.appendChild(svgEl("line", { x1: padL, x2: W - padR, y1: yPix(0), y2: yPix(0), class: "zeroLine" }));
+
+    [0, dates.length - 1].forEach(function (i) {
+      if (i < 0) return;
+      var lbl = svgEl("text", { x: xPix(i), y: H - padB + 14, "text-anchor": i === 0 ? "start" : "end", "font-size": "9.5" });
+      lbl.textContent = dates[i];
+      svg.appendChild(lbl);
+    });
+
+    function pathFor(vals) {
+      return vals.map(function (v, i) { return (i === 0 ? "M" : "L") + xPix(i) + " " + yPix(v); }).join(" ");
+    }
+    svg.appendChild(svgEl("path", { d: pathFor(dailyMeans), class: "dailyLine" }));
+    dailyMeans.forEach(function (v, i) {
+      var pt = svgEl("circle", { cx: xPix(i), cy: yPix(v), r: 2.2, class: "dailyPoint" });
+      pt.appendChild(svgEl("title", {})).textContent = dates[i] + ": " + v.toFixed(2);
+      svg.appendChild(pt);
+    });
+    svg.appendChild(svgEl("path", { d: pathFor(rolled), class: "rollLine" }));
+
+    container.appendChild(svg);
+  }
+
+  function niceTicks(min, max, count) {
+    var span = max - min;
+    if (span <= 0) return [min];
+    var raw = span / count;
+    var mag = Math.pow(10, Math.floor(Math.log(raw) / Math.LN10));
+    var norm = raw / mag;
+    var step = (norm >= 5 ? 5 : norm >= 2 ? 2 : 1) * mag;
+    var start = Math.ceil(min / step) * step;
+    var out = [];
+    for (var v = start; v <= max; v += step) out.push(Math.round(v * 1000) / 1000);
+    return out;
+  }
+
+  // ---- controls / render orchestration -----------------------------------
+  function fdraStations(fdraId) {
+    if (fdraId === "__ALL__") return manifest.stations;
+    return manifest.stations.filter(function (s) { return s.fdra === fdraId; });
+  }
+
+  function populateFdraSelect() {
+    els.fdraSelect.innerHTML = "";
+    var allOpt = document.createElement("option");
+    allOpt.value = "__ALL__"; allOpt.textContent = "All FDRAs";
+    els.fdraSelect.appendChild(allOpt);
+    manifest.fdras.forEach(function (f) {
+      var opt = document.createElement("option");
+      opt.value = f.id; opt.textContent = f.name + " (" + f.id + ")";
+      els.fdraSelect.appendChild(opt);
+    });
+    state.fdra = manifest.fdras.length ? manifest.fdras[0].id : "__ALL__";
+    els.fdraSelect.value = state.fdra;
+  }
+
+  function populateStationSelect() {
+    els.stationSelect.innerHTML = "";
+    fdraStations(state.fdra).forEach(function (s) {
+      var opt = document.createElement("option");
+      opt.value = s.id; opt.textContent = s.name + " (" + s.id + ")";
+      els.stationSelect.appendChild(opt);
+    });
+  }
+
+  function populateIndexPills() {
+    els.indexPills.innerHTML = "";
+    manifest.index_columns.forEach(function (code) {
+      var btn = document.createElement("button");
+      btn.type = "button"; btn.className = "pill"; btn.setAttribute("role", "tab");
+      btn.textContent = manifest.index_labels[code] || code;
+      btn.addEventListener("click", function () {
+        state.index = code;
+        updateIndexPillState();
+        render();
+      });
+      els.indexPills.appendChild(btn);
+    });
+    state.index = manifest.index_columns[0] || null;
+    updateIndexPillState();
+  }
+  function updateIndexPillState() {
+    Array.prototype.forEach.call(els.indexPills.children, function (btn, i) {
+      btn.setAttribute("aria-selected", String(manifest.index_columns[i] === state.index));
+    });
+  }
+
+  function populateLeadSelect() {
+    els.leadSelect.innerHTML = "";
+    manifest.lead_time_days.forEach(function (lt) {
+      var opt = document.createElement("option");
+      opt.value = String(lt); opt.textContent = "Day +" + lt;
+      els.leadSelect.appendChild(opt);
+    });
+    state.leadTime = manifest.lead_time_days.indexOf(1) !== -1 ? 1 : manifest.lead_time_days[0];
+    els.leadSelect.value = String(state.leadTime);
+  }
+
+  function defaultDateRange() {
+    var latest = manifest.date_range.latest, earliest = manifest.date_range.earliest;
+    var end = latest;
+    var start = addDays(end, -29);
+    if (start < earliest) start = earliest;
+    return { start: start, end: end };
+  }
+
+  function render() {
+    var startIso = els.startDate.value, endIso = els.endDate.value;
+    if (!startIso || !endIso || !state.index) return;
+    var months = monthsBetween(startIso, endIso);
+    els.statusBar.textContent = "Loading " + months.length + " month chunk(s)…";
+
+    ensureChunksLoaded(months).then(function () {
+      var records = filteredDiffs(months, startIso, endIso);
+      els.statusBar.textContent = records.length + " observed/forecast pair(s) in view " +
+        "(" + startIso + " to " + endIso + ", " + months.length + " month chunk(s) loaded)";
+
+      // Panel A -- by lead time, ALL lead times pooled (not filtered to the trend lead).
+      var byLead = {};
+      records.forEach(function (r) {
+        (byLead[r.lead_time_days] = byLead[r.lead_time_days] || []).push(r.diff);
+      });
+      var leadKeys = Object.keys(byLead).map(Number).sort(function (a, b) { return a - b; });
+      if (leadKeys.length) {
+        els.panelAEmpty.hidden = true;
+        renderBoxPlot(els.panelABody, leadKeys.map(function (lt) {
+          return { label: "+" + lt + "d", stats: boxStats(byLead[lt]) };
+        }), manifest.index_labels[state.index] || state.index);
+      } else {
+        els.panelABody.innerHTML = "";
+        els.panelABody.appendChild(els.panelAEmpty);
+        els.panelAEmpty.hidden = false;
+      }
+      els.panelASub.textContent = (manifest.index_labels[state.index] || state.index) +
+        ", observed − forecast, all lead times";
+
+      // Panel C -- trend over time at the selected fixed lead time.
+      var trendRecords = records.filter(function (r) { return r.lead_time_days === state.leadTime; });
+      var byDate = {};
+      trendRecords.forEach(function (r) { (byDate[r.date] = byDate[r.date] || []).push(r.diff); });
+      var dates = Object.keys(byDate).sort();
+      if (dates.length) {
+        els.panelCEmpty.hidden = true;
+        var dailyMeans = dates.map(function (d) {
+          var vals = byDate[d]; return vals.reduce(function (a, b) { return a + b; }, 0) / vals.length;
+        });
+        var rolled = rollingMean(dates, dailyMeans, TREND_ROLLING_WINDOW_DAYS);
+        renderTrend(els.panelCBody, dates, dailyMeans, rolled);
+      } else {
+        els.panelCBody.innerHTML = "";
+        els.panelCBody.appendChild(els.panelCEmpty);
+        els.panelCEmpty.hidden = false;
+      }
+      els.panelCSub.textContent = "Day +" + state.leadTime + " forecast, " + TREND_ROLLING_WINDOW_DAYS + "-day rolling mean";
+    });
+  }
+
+  function wireControls() {
+    els.fdraSelect.addEventListener("change", function () {
+      state.fdra = els.fdraSelect.value;
+      populateStationSelect();
+      render();
+    });
+    els.stationSelect.addEventListener("change", render);
+    els.leadSelect.addEventListener("change", function () {
+      state.leadTime = Number(els.leadSelect.value);
+      render();
+    });
+    els.startDate.addEventListener("change", render);
+    els.endDate.addEventListener("change", render);
+  }
+
+  function loadGacc(g) {
+    gacc = g;
+    return fetch(gacc + "/manifest.json").then(function (r) {
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      return r.json();
+    }).then(function (data) {
+      manifest = data;
+      chunkCache = {};
+      els.issuedSub.textContent = gacc + " · " + manifest.date_range.earliest + " to " + manifest.date_range.latest;
+
+      populateFdraSelect();
+      populateStationSelect();
+      populateIndexPills();
+      populateLeadSelect();
+      var range = defaultDateRange();
+      els.startDate.min = manifest.date_range.earliest; els.startDate.max = manifest.date_range.latest;
+      els.endDate.min = manifest.date_range.earliest; els.endDate.max = manifest.date_range.latest;
+      els.startDate.value = range.start; els.endDate.value = range.end;
+
+      wireControls();
+      els.loadState.hidden = true;
+      els.consoleEl.hidden = false;
+      render();
+    });
+  }
+
+  fetch("gaccs.json").then(function (r) {
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    return r.json();
+  }).then(function (gaccs) {
+    if (!gaccs.length) throw new Error("gaccs.json is empty");
+    var params = new URLSearchParams(window.location.search);
+    var requested = params.get("gacc");
+    return loadGacc(requested && gaccs.indexOf(requested) !== -1 ? requested : gaccs[0]);
+  }).catch(function (err) {
+    els.loadState.textContent = "Could not load data (" + err.message + "). This viewer must be " +
+      "served over http(s):// alongside the gaccs.json/<gacc>/manifest.json/<gacc>/data/ files " +
+      "scripts/nfdrs_ovf_web_export.py wrote -- opening it directly via file:// will not work.";
+  });
+})();
+</script>
+</body>
+</html>
