@@ -101,6 +101,24 @@
   .statusBar { font-size: 11px; color: var(--text-dim); margin: 8px 2px 0; }
   .loadstate { font-size: 13px; color: var(--text-dim); text-align: center; padding: 40px; }
 
+  .infoBlock {
+    margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border);
+  }
+  .sourceLine { font-size: 11.5px; line-height: 1.6; color: var(--text-dim); margin: 0 0 8px; }
+  .sourceLine a { color: var(--accent); }
+  .sourceLine strong { color: var(--text); }
+  details.howTo {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 10px 12px;
+  }
+  details.howTo summary {
+    font-size: 12.5px; font-weight: 700; cursor: pointer; color: var(--text); list-style: revert;
+  }
+  details.howTo summary:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+  .howToBody { font-size: 12px; line-height: 1.6; color: var(--text-dim); margin-top: 10px; }
+  .howToBody p { margin: 0 0 10px; }
+  .howToBody p:last-child { margin-bottom: 0; }
+  .howToBody strong { color: var(--text); }
+
   svg text { fill: var(--text-dim); font-family: inherit; }
   .axisLine { stroke: var(--border); stroke-width: 1; }
   .gridLine { stroke: var(--border); stroke-width: 0.7; opacity: 0.6; }
@@ -170,6 +188,45 @@
       </div>
 
       <div class="statusBar" id="statusBar"></div>
+
+      <div class="infoBlock">
+        <p class="sourceLine">
+          <strong>Source:</strong> USDA Forest Service FEMS (<a href="https://fems.fs2c.usda.gov/" target="_blank" rel="noopener">fems.fs2c.usda.gov</a>)
+          NFDRS daily-summary API. Forecast values are as originally issued by FEMS on each forecast
+          pull date; observed values reflect FEMS's most recently QA-revised daily observation.
+          Station roster: <span id="metaGacc">&mdash;</span> RAWS network
+          (<span id="metaStationCount">&mdash;</span> stations, <span id="metaFdraCount">&mdash;</span> PSAs/FDRAs).
+          Archive covers <span id="metaDateRange">&mdash;</span>. This page's data was last regenerated
+          <span id="metaGenerated">&mdash;</span>. Internal ONCC forecast-verification tool, not an
+          official FEMS or NWS product.
+        </p>
+        <details class="howTo">
+          <summary>How to interpret these charts</summary>
+          <div class="howToBody">
+            <p>Both charts plot <strong>Observed &minus; Forecast</strong> for whichever index is
+            selected above: a positive value means the actual observed value came in <em>higher</em>
+            than FEMS's forecast predicted (the forecast under-predicted fire danger); a negative value
+            means the forecast over-predicted. The red horizontal line at zero marks a perfectly
+            accurate forecast.</p>
+            <p><strong>By Forecast Lead Time (box plot):</strong> each box summarizes the distribution
+            of Observed&minus;Forecast bias for forecasts issued that many days ahead of the day they
+            were predicting (e.g. &ldquo;+3d&rdquo; = a forecast issued 3 days before the target date).
+            The box spans the 25th&ndash;75th percentile (interquartile range, IQR) of the diffs in
+            view; the line inside the box is the median. Whiskers extend to the most extreme value
+            still within 1.5&times;IQR of the box edge; open circles beyond the whiskers are outliers
+            &mdash; the standard Tukey box-plot convention, matching matplotlib's own default (the same
+            method the static PNG charts this viewer complements use). Boxes that widen or drift away
+            from zero at longer lead times indicate forecast skill decaying the further out a
+            prediction was made.</p>
+            <p><strong>Trend Over Time (line chart):</strong> the x-axis is calendar date; the y-axis is
+            mean Observed&minus;Forecast bias (same units as the selected index) at the single lead time
+            chosen in the &ldquo;Trend lead time&rdquo; control above. The lighter line/dots are each
+            day's own mean bias; the darker line is a 7-day trailing rolling mean, which smooths
+            day-to-day noise so a real drift (e.g. bias growing as fuels dry out and cure through the
+            season) shows up as a slope rather than being lost in daily scatter.</p>
+          </div>
+        </details>
+      </div>
     </div>
   </div>
 
@@ -196,6 +253,11 @@
     panelCBody: document.getElementById("panelCBody"),
     panelCEmpty: document.getElementById("panelCEmpty"),
     statusBar: document.getElementById("statusBar"),
+    metaGacc: document.getElementById("metaGacc"),
+    metaStationCount: document.getElementById("metaStationCount"),
+    metaFdraCount: document.getElementById("metaFdraCount"),
+    metaDateRange: document.getElementById("metaDateRange"),
+    metaGenerated: document.getElementById("metaGenerated"),
   };
 
   var manifest = null;
@@ -514,6 +576,16 @@
     els.leadSelect.value = String(state.leadTime);
   }
 
+  function populateMetaLine() {
+    els.metaGacc.textContent = gacc;
+    els.metaStationCount.textContent = String(manifest.stations.length);
+    els.metaFdraCount.textContent = String(manifest.fdras.length);
+    els.metaDateRange.textContent = manifest.date_range.earliest + " to " + manifest.date_range.latest;
+    var generated = new Date(manifest.generated_at_utc);
+    els.metaGenerated.textContent = isNaN(generated) ? manifest.generated_at_utc :
+      generated.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+  }
+
   function defaultDateRange() {
     var latest = manifest.date_range.latest, earliest = manifest.date_range.earliest;
     var end = latest;
@@ -597,6 +669,7 @@
       manifest = data;
       chunkCache = {};
       els.issuedSub.textContent = gacc + " · " + manifest.date_range.earliest + " to " + manifest.date_range.latest;
+      populateMetaLine();
 
       populateFdraSelect();
       populateStationSelect();
