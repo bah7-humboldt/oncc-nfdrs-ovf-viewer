@@ -1,0 +1,683 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NFDRS Fire Danger Charts (Interactive)</title>
+<!-- Served over real https:// (GitHub Pages) or http://localhost, same as
+     scripts/templates/nfdrs_ovf_web_viewer.html -- plain fetch() of sibling JSON files, never
+     file://. See scripts/fdra_charts_web_export.py's own module docstring for the output
+     layout this fetches: gaccs.json, <gacc>/manifest.json, <gacc>/data/_gacc.json,
+     <gacc>/data/<fdra_id>.json. Published as a second page (fdra-charts/) on the SAME GitHub
+     Pages site as ../index.html (the OVF forecast-accuracy viewer), not a separate site. -->
+<style>
+  :root {
+    --bg: #eef1f0; --surface: #ffffff; --surface-2: #e2e6e4; --surface-3: #d5dad7;
+    --border: #c7cdc9; --text: #1b201e; --text-dim: #5c655f;
+    --accent: #2a78d6; --accent-ink: #ffffff; --accent-soft: #d7e6f8; --focus: #1b6de0;
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #12161a; --surface: #191f24; --surface-2: #212830; --surface-3: #2a323b;
+      --border: #333d47; --text: #e8ecef; --text-dim: #8b98a3;
+      --accent: #6fa8ff; --accent-ink: #0b1520; --accent-soft: #23354d; --focus: #6fa8ff;
+      color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #12161a; --surface: #191f24; --surface-2: #212830; --surface-3: #2a323b;
+    --border: #333d47; --text: #e8ecef; --text-dim: #8b98a3;
+    --accent: #6fa8ff; --accent-ink: #0b1520; --accent-soft: #23354d; --focus: #6fa8ff;
+    color-scheme: dark;
+  }
+  :root[data-theme="light"] {
+    --bg: #eef1f0; --surface: #ffffff; --surface-2: #e2e6e4; --surface-3: #d5dad7;
+    --border: #c7cdc9; --text: #1b201e; --text-dim: #5c655f;
+    --accent: #2a78d6; --accent-ink: #ffffff; --accent-soft: #d7e6f8; --focus: #1b6de0;
+    color-scheme: light;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .mono { font-family: ui-monospace, "SF Mono", "Cascadia Mono", "Roboto Mono", Consolas, monospace; }
+  .page { max-width: 1200px; margin: 0 auto; padding: 14px; }
+
+  .brand { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
+  .brand-mark {
+    font-family: ui-monospace, "SF Mono", "Cascadia Mono", "Roboto Mono", Consolas, monospace;
+    font-size: 11px; font-weight: 700; letter-spacing: 0.06em;
+    background: var(--accent); color: var(--accent-ink); padding: 3px 6px; border-radius: 3px; line-height: 1;
+  }
+  .brand h1 { margin: 0; font-size: 16px; font-weight: 650; letter-spacing: -0.01em; }
+  .brand .sub { font-size: 11.5px; color: var(--text-dim); margin-left: 4px; }
+  .brand .swap { margin-left: auto; font-size: 11.5px; }
+  .brand .swap a { color: var(--accent); }
+
+  .controls {
+    display: flex; flex-wrap: wrap; gap: 12px 16px;
+    background: var(--surface); border: 1px solid var(--border); border-radius: 6px;
+    padding: 12px; margin-bottom: 12px;
+  }
+  .field { display: flex; flex-direction: column; gap: 4px; }
+  .fieldLabel {
+    font-size: 9.5px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase;
+    color: var(--text-dim);
+  }
+  select {
+    font: inherit; font-size: 12.5px; color: var(--text); background: var(--surface-2);
+    border: 1px solid var(--border); border-radius: 4px; padding: 5px 8px; min-width: 190px;
+  }
+  .pillRow { display: flex; gap: 6px; flex-wrap: wrap; max-width: 420px; }
+  .pill {
+    appearance: none; border: 1px solid var(--border); background: var(--surface-2);
+    color: var(--text); font: inherit; font-size: 12px; font-weight: 550;
+    padding: 5px 10px; border-radius: 999px; cursor: pointer;
+  }
+  .pill:hover { border-color: var(--text-dim); }
+  .pill[aria-selected="true"] { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+
+  .panel {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 6px; overflow: hidden;
+  }
+  .panelHead { padding: 8px 12px; border-bottom: 1px solid var(--border); background: var(--surface-2); }
+  .panelTitle { font-size: 13px; font-weight: 700; letter-spacing: 0.01em; }
+  .panelSub { font-size: 10.5px; color: var(--text-dim); margin-top: 1px; }
+  .panelBody { padding: 8px; position: relative; }
+  .panelBody svg { width: 100%; height: auto; display: block; }
+  .panelEmpty { font-size: 13px; color: var(--text-dim); text-align: center; padding: 40px 12px; }
+  .hoverTip {
+    position: absolute; pointer-events: none; z-index: 5;
+    background: var(--surface); border: 1px solid var(--border); border-radius: 5px;
+    padding: 6px 9px; font-size: 11px; line-height: 1.5; color: var(--text);
+    box-shadow: 0 2px 8px rgba(0,0,0,0.18); white-space: nowrap;
+  }
+  .hoverTip .hoverDate { font-weight: 700; margin-bottom: 2px; }
+
+  .legendRow { display: flex; flex-wrap: wrap; gap: 14px 20px; padding: 10px 12px; border-top: 1px solid var(--border); }
+  .legendGroup { display: flex; flex-direction: column; gap: 5px; }
+  .legendGroupTitle { font-size: 9.5px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-dim); }
+  .legendItems { display: flex; flex-wrap: wrap; gap: 8px 14px; }
+  .legendItem { display: flex; align-items: center; gap: 5px; font-size: 11px; color: var(--text); }
+  .legendSwatchLine { width: 16px; height: 0; border-top-width: 2.4px; border-top-style: solid; }
+  .legendSwatchBox { width: 12px; height: 12px; border-radius: 2px; }
+
+  .statusBar { font-size: 11px; color: var(--text-dim); margin: 8px 2px 0; }
+  .loadstate { font-size: 13px; color: var(--text-dim); text-align: center; padding: 40px; }
+
+  .infoBlock { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); }
+  .sourceLine { font-size: 11.5px; line-height: 1.6; color: var(--text-dim); margin: 0 0 8px; }
+  .sourceLine a { color: var(--accent); }
+  .sourceLine strong { color: var(--text); }
+  details.howTo { background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 10px 12px; }
+  details.howTo summary { font-size: 12.5px; font-weight: 700; cursor: pointer; color: var(--text); list-style: revert; }
+  details.howTo summary:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+  .howToBody { font-size: 12px; line-height: 1.6; color: var(--text-dim); margin-top: 10px; }
+  .howToBody p { margin: 0 0 10px; }
+  .howToBody p:last-child { margin-bottom: 0; }
+  .howToBody strong { color: var(--text); }
+
+  svg text { fill: var(--text-dim); font-family: inherit; }
+  .axisLine { stroke: var(--border); stroke-width: 1; }
+  .gridLine { stroke: var(--border); stroke-width: 0.7; opacity: 0.6; }
+  .avgLine { stroke: #8a8a8a; stroke-width: 1.6; fill: none; }
+  .extremeLine { stroke: #d1352b; stroke-width: 1.6; fill: none; }
+  .obsLine { stroke: #2a78d6; stroke-width: 2; fill: none; }
+  .fcastLine { stroke: #2f9e44; stroke-width: 2; fill: none; }
+  .fcastPoint { fill: #2f9e44; }
+  .obsPoint { fill: #2a78d6; }
+  .breakpointLine { stroke: var(--text-dim); stroke-width: 1; stroke-dasharray: 3 3; opacity: 0.85; }
+  .crosshair { stroke: var(--text-dim); stroke-width: 1; stroke-dasharray: 2 2; }
+
+  @media (max-width: 760px) {
+    select { min-width: 0; width: 100%; }
+  }
+</style>
+</head>
+<body>
+  <div class="page">
+    <div class="brand"><span class="brand-mark">NFDRS</span><h1>NFDRS Fire Danger Charts</h1>
+      <span class="sub" id="issuedSub"></span>
+      <span class="swap"><a href="../index.html">&larr; OVF forecast-accuracy charts</a></span>
+    </div>
+
+    <div id="loadState" class="loadstate">Loading&hellip;</div>
+
+    <div id="console" hidden>
+      <div class="controls">
+        <div class="field">
+          <span class="fieldLabel">PSA</span>
+          <select id="fdraSelect"></select>
+        </div>
+        <div class="field">
+          <span class="fieldLabel">Level</span>
+          <select id="stationSelect"></select>
+        </div>
+        <div class="field">
+          <span class="fieldLabel">Index</span>
+          <div class="pillRow" id="indexPills" role="tablist" aria-label="Index"></div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panelHead">
+          <div class="panelTitle" id="panelTitle">&nbsp;</div>
+          <div class="panelSub" id="panelSub"></div>
+        </div>
+        <div class="panelBody" id="panelBody"><div class="panelEmpty" id="panelEmpty">No data for this selection.</div></div>
+        <div class="legendRow">
+          <div class="legendGroup">
+            <span class="legendGroupTitle">Lines</span>
+            <div class="legendItems">
+              <span class="legendItem"><span class="legendSwatchLine" style="border-color:#8a8a8a"></span>Historical average</span>
+              <span class="legendItem"><span class="legendSwatchLine" style="border-color:#d1352b"></span>Historical extreme</span>
+              <span class="legendItem"><span class="legendSwatchLine" style="border-color:#2a78d6"></span>Current year (observed)</span>
+              <span class="legendItem"><span class="legendSwatchLine" style="border-color:#2f9e44"></span>Forecast (+7d)</span>
+            </div>
+          </div>
+          <div class="legendGroup">
+            <span class="legendGroupTitle" id="bandsTitle">Percentile bands</span>
+            <div class="legendItems" id="bandsLegend"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="statusBar" id="statusBar"></div>
+
+      <div class="infoBlock">
+        <p class="sourceLine">
+          <strong>Source:</strong> USDA Forest Service FEMS (<a href="https://fems.fs2c.usda.gov/" target="_blank" rel="noopener">fems.fs2c.usda.gov</a>)
+          NFDRS daily-summary API. <span id="metaClimatology">&mdash;</span>. Historical
+          average/extreme lines and percentile bands come from that window; current-year and
+          forecast lines are refreshed each run. Station roster: <span id="metaGacc">&mdash;</span>
+          RAWS network (<span id="metaStationCount">&mdash;</span> stations,
+          <span id="metaFdraCount">&mdash;</span> PSAs). This page's data was last
+          regenerated <span id="metaGenerated">&mdash;</span>. Internal ONCC analyst tool, not an
+          official FEMS or NWS product. Chart style based on
+          <a href="https://github.com/mpanunto/NFDRS_FEMS" target="_blank" rel="noopener">mpanunto/NFDRS_FEMS</a>.
+        </p>
+        <details class="howTo">
+          <summary>How to interpret these charts</summary>
+          <div class="howToBody">
+            <p>The x-axis is day-of-year (Feb 29 is folded into Feb 28 in leap years so every
+            year lines up on the same axis, same convention scripts/FDRACharts.py's own static
+            NFDRS Fire Danger Charts use). The colored bands are percentile thresholds computed from
+            the same historical window as the average/extreme lines: 60th/80th/90th/97th/99.99th
+            percentile for most indices, or the same tiers against the LOW tail for the two fuel
+            moisture indices (dry = dangerous there, so low values shade toward the most severe
+            color instead of high ones).</p>
+            <p><strong>Historical average/extreme:</strong> the gray line is the mean value for
+            that calendar day across every year in the historical window; the red line is that
+            same day's most extreme (driest, or highest danger) value ever recorded.</p>
+            <p><strong>Current year / forecast:</strong> the blue line is this year's actual
+            observed daily value through the most recent FEMS observation; the green line
+            is FEMS's current 7-day forecast, picking up where the observed line leaves off.</p>
+          </div>
+        </details>
+      </div>
+    </div>
+  </div>
+
+<script>
+(function () {
+  "use strict";
+
+  var MONTH_START_DOY = [1, 32, 60, 91, 121, 152, 182, 213, 244, 274, 305, 335];
+  var MONTH_LABELS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  var MONTH_LABELS_FULL = ["January", "February", "March", "April", "May", "June", "July",
+    "August", "September", "October", "November", "December"];
+  var GACC_KEY = "__GACC__";
+
+  var els = {
+    loadState: document.getElementById("loadState"),
+    consoleEl: document.getElementById("console"),
+    issuedSub: document.getElementById("issuedSub"),
+    fdraSelect: document.getElementById("fdraSelect"),
+    stationSelect: document.getElementById("stationSelect"),
+    indexPills: document.getElementById("indexPills"),
+    panelTitle: document.getElementById("panelTitle"),
+    panelSub: document.getElementById("panelSub"),
+    panelBody: document.getElementById("panelBody"),
+    panelEmpty: document.getElementById("panelEmpty"),
+    bandsTitle: document.getElementById("bandsTitle"),
+    bandsLegend: document.getElementById("bandsLegend"),
+    statusBar: document.getElementById("statusBar"),
+    metaGacc: document.getElementById("metaGacc"),
+    metaStationCount: document.getElementById("metaStationCount"),
+    metaFdraCount: document.getElementById("metaFdraCount"),
+    metaClimatology: document.getElementById("metaClimatology"),
+    metaGenerated: document.getElementById("metaGenerated"),
+  };
+
+  var manifest = null, gacc = null;
+  var chunkCache = {}; // chunkKey ("_gacc" or an fdra id) -> parsed chunk
+  var state = { fdraId: GACC_KEY, entityKey: null, index: null };
+
+  // ---- data loading -------------------------------------------------------
+  function chunkKeyFor(fdraId) { return fdraId === GACC_KEY ? "_gacc" : fdraId; }
+
+  function ensureChunkLoaded(chunkKey) {
+    if (chunkKey in chunkCache) return Promise.resolve(chunkCache[chunkKey]);
+    return fetch(gacc + "/data/" + chunkKey + ".json").then(function (r) {
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      return r.json();
+    }).then(function (chunk) {
+      chunkCache[chunkKey] = chunk;
+      return chunk;
+    });
+  }
+
+  // ---- SVG rendering -------------------------------------------------------
+  var SVG_NS = "http://www.w3.org/2000/svg";
+  function svgEl(tag, attrs) {
+    var el = document.createElementNS(SVG_NS, tag);
+    for (var k in attrs) el.setAttribute(k, attrs[k]);
+    return el;
+  }
+
+  function niceTicks(min, max, count) {
+    var span = max - min;
+    if (span <= 0) return [min];
+    var raw = span / count;
+    var mag = Math.pow(10, Math.floor(Math.log(raw) / Math.LN10));
+    var norm = raw / mag;
+    var step = (norm >= 5 ? 5 : norm >= 2 ? 2 : 1) * mag;
+    var start = Math.ceil(min / step) * step;
+    var out = [];
+    for (var v = start; v <= max; v += step) out.push(Math.round(v * 1000) / 1000);
+    return out;
+  }
+
+  // Splits a 365-length array (nulls allowed) into contiguous non-null runs, each returned as
+  // an SVG path "d" string via xPix/yPix -- so a chart with a few missing station-days still
+  // draws real line segments instead of one path silently jumping across the gap.
+  function linePaths(values, xPix, yPix) {
+    var paths = [], current = null;
+    for (var i = 0; i < values.length; i++) {
+      if (values[i] === null || values[i] === undefined) { current = null; continue; }
+      var cmd = (current === null ? "M" : "L") + xPix(i) + " " + yPix(values[i]);
+      if (current === null) { current = cmd; paths.push(current); }
+      else { paths[paths.length - 1] += " " + cmd; }
+    }
+    return paths;
+  }
+
+  function lastNonNullIndex(values) {
+    for (var i = values.length - 1; i >= 0; i--) if (values[i] !== null && values[i] !== undefined) return i;
+    return -1;
+  }
+
+  // day-of-year (1-365, Feb 29 already folded into Feb 28 -- same convention the exported
+  // data uses) -> "September 10", for the hover tooltip's date line.
+  function doyToLabel(doy) {
+    var mIdx = 0;
+    for (var i = 0; i < MONTH_START_DOY.length; i++) if (doy >= MONTH_START_DOY[i]) mIdx = i;
+    var day = doy - MONTH_START_DOY[mIdx] + 1;
+    return MONTH_LABELS_FULL[mIdx] + " " + day;
+  }
+
+  // Linear interpolation (extrapolated flat-slope past the ends, clamped to 0-100) through
+  // series.percentile_points ([value, percentile] pairs, ascending by value) -- an
+  // approximation from only 5 known breakpoints, same tradeoff the reference lines/right-axis
+  // labels already make, just applied to an arbitrary hovered value instead of the 5 exact ones.
+  function percentileForValue(points, value) {
+    if (!points || !points.length) return null;
+    if (points.length === 1) return points[0][1];
+    var i;
+    if (value <= points[0][0]) i = 0;
+    else if (value >= points[points.length - 1][0]) i = points.length - 2;
+    else {
+      for (i = 0; i < points.length - 1; i++) {
+        if (value >= points[i][0] && value <= points[i + 1][0]) break;
+      }
+    }
+    var a = points[i], b = points[i + 1];
+    var t = (value - a[0]) / (b[0] - a[0]);
+    return Math.max(0, Math.min(100, a[1] + t * (b[1] - a[1])));
+  }
+  function fmtPct(p) { return String(Math.round(p * 10) / 10); }
+
+  function renderChart(container, series) {
+    container.innerHTML = "";
+    var W = 900, H = 380, padL = 42, padR = 46, padT = 18, padB = 24;
+    var plotW = W - padL - padR, plotH = H - padT - padB;
+
+    var allVals = [];
+    ["avg", "extreme", "current_year", "forecast"].forEach(function (key) {
+      series[key].forEach(function (v) { if (v !== null && v !== undefined) allVals.push(v); });
+    });
+    series.bands.forEach(function (b) {
+      if (b.floor !== null) allVals.push(b.floor);
+      if (b.ceil !== null) allVals.push(b.ceil);
+    });
+    if (!allVals.length) { return false; }
+    var yMin = Math.min.apply(null, allVals), yMax = Math.max.apply(null, allVals);
+    var yPad = (yMax - yMin) * 0.06 || 1;
+    yMin = Math.max(0, yMin - yPad); yMax += yPad;
+
+    function xPix(i) { return padL + plotW * (i / 364); }
+    function yPix(v) { return padT + plotH * (1 - (v - yMin) / (yMax - yMin)); }
+    var clip = function (v) { return Math.max(yMin, Math.min(yMax, v)); };
+
+    var svg = svgEl("svg", { viewBox: "0 0 " + W + " " + H });
+
+    // Percentile color bands (drawn first, behind everything else).
+    series.bands.forEach(function (b) {
+      var floor = b.floor === null ? yMin : b.floor, ceil = b.ceil === null ? yMax : b.ceil;
+      if (ceil <= yMin || floor >= yMax) return;
+      floor = clip(floor); ceil = clip(ceil);
+      svg.appendChild(svgEl("rect", {
+        x: padL, width: plotW, y: yPix(ceil), height: Math.max(0, yPix(floor) - yPix(ceil)),
+        fill: b.color, "fill-opacity": "0.55",
+      }));
+    });
+
+    // Y gridlines/ticks.
+    niceTicks(yMin, yMax, 6).forEach(function (t) {
+      var y = yPix(t);
+      svg.appendChild(svgEl("line", { x1: padL, x2: W - padR, y1: y, y2: y, class: "gridLine" }));
+      var lbl = svgEl("text", { x: padL - 6, y: y + 3, "text-anchor": "end", "font-size": "9.5" });
+      lbl.textContent = t;
+      svg.appendChild(lbl);
+    });
+    svg.appendChild(svgEl("line", { x1: padL, x2: padL, y1: padT, y2: H - padB, class: "axisLine" }));
+    svg.appendChild(svgEl("line", { x1: W - padR, x2: W - padR, y1: padT, y2: H - padB, class: "axisLine" }));
+    var valueHdr = svgEl("text", { x: padL, y: padT - 6, "font-size": "9", "font-weight": "700" });
+    valueHdr.textContent = "VALUE";
+    svg.appendChild(valueHdr);
+    var pctHdr = svgEl("text", { x: W - padR, y: padT - 6, "text-anchor": "end", "font-size": "9", "font-weight": "700" });
+    pctHdr.textContent = "PERCENTILE";
+    svg.appendChild(pctHdr);
+
+    // Percentile breakpoint reference lines (scripts/FDRACharts.py's own axhline-style
+    // threshold lines) -- each one's right-axis label is that breakpoint's real historical
+    // percentile, e.g. "80th", read straight off series.percentile_points rather than an
+    // evenly-spaced 0-100 axis (only 5 real percentile values are known per index).
+    series.percentile_points.forEach(function (pair) {
+      var value = pair[0], pct = pair[1];
+      if (value < yMin || value > yMax) return;
+      var y = yPix(value);
+      svg.appendChild(svgEl("line", { x1: padL, x2: W - padR, y1: y, y2: y, class: "breakpointLine" }));
+      var lbl = svgEl("text", { x: W - padR + 5, y: y + 3, "font-size": "9.5" });
+      lbl.textContent = fmtPct(pct) + "th";
+      svg.appendChild(lbl);
+    });
+
+    // Month gridlines/labels.
+    MONTH_START_DOY.forEach(function (doy, i) {
+      var x = xPix(doy - 1);
+      svg.appendChild(svgEl("line", { x1: x, x2: x, y1: padT, y2: H - padB, class: "gridLine" }));
+      var lbl = svgEl("text", { x: x + 3, y: H - padB + 12, "font-size": "9.5" });
+      lbl.textContent = MONTH_LABELS[i];
+      svg.appendChild(lbl);
+    });
+
+    function addPathGroup(values, cssClass) {
+      linePaths(values, xPix, yPix).forEach(function (d) {
+        svg.appendChild(svgEl("path", { d: d, class: cssClass }));
+      });
+    }
+    addPathGroup(series.avg, "avgLine");
+    addPathGroup(series.extreme, "extremeLine");
+    addPathGroup(series.current_year, "obsLine");
+
+    var lastObsIdx = lastNonNullIndex(series.current_year);
+    if (lastObsIdx !== -1) {
+      var pt = svgEl("circle", { cx: xPix(lastObsIdx), cy: yPix(series.current_year[lastObsIdx]), r: 2.6, class: "obsPoint" });
+      pt.appendChild(svgEl("title", {})).textContent = "Latest observed: " + series.current_year[lastObsIdx];
+      svg.appendChild(pt);
+
+      // Stitch the forecast line onto the last observed point purely for visual continuity --
+      // matches scripts/FDRACharts.py's own fems_fuels_charts(), which plots the forecast
+      // series starting from the current-year line's own last point.
+      var d = "M" + xPix(lastObsIdx) + " " + yPix(series.current_year[lastObsIdx]);
+      for (var i = lastObsIdx + 1; i < series.forecast.length; i++) {
+        if (series.forecast[i] === null || series.forecast[i] === undefined) continue;
+        d += " L" + xPix(i) + " " + yPix(series.forecast[i]);
+      }
+      svg.appendChild(svgEl("path", { d: d, class: "fcastLine" }));
+    }
+    series.forecast.forEach(function (v, i) {
+      if (v === null || v === undefined) return;
+      var pt = svgEl("circle", { cx: xPix(i), cy: yPix(v), r: 2.6, class: "fcastPoint" });
+      pt.appendChild(svgEl("title", {})).textContent = "Forecast: " + v;
+      svg.appendChild(pt);
+    });
+
+    // Hover crosshair + tooltip -- reports whichever lines have a real value at the hovered
+    // day, each with its own interpolated percentile (percentileForValue() against this
+    // series' own percentile_points), e.g. "Average: BI 22.4 (64th percentile)".
+    var hoverLine = svgEl("line", { x1: 0, x2: 0, y1: padT, y2: H - padB, class: "crosshair", visibility: "hidden" });
+    svg.appendChild(hoverLine);
+    var captureRect = svgEl("rect", { x: padL, y: padT, width: plotW, height: plotH, fill: "transparent" });
+    captureRect.style.cursor = "crosshair";
+    svg.appendChild(captureRect);
+
+    var tip = document.createElement("div");
+    tip.className = "hoverTip";
+    tip.hidden = true;
+    container.appendChild(tip);
+
+    function tipRow(label, value) {
+      if (value === null || value === undefined) return null;
+      var pct = percentileForValue(series.percentile_points, value);
+      var pctStr = pct === null ? "" : " (" + fmtPct(pct) + "th percentile)";
+      return label + ": " + state.index + " " + fmt(value) + pctStr;
+    }
+
+    captureRect.addEventListener("mousemove", function (evt) {
+      var svgRect = svg.getBoundingClientRect();
+      var localX = (evt.clientX - svgRect.left) * (W / svgRect.width);
+      var dayIndex = Math.max(0, Math.min(364, Math.round((localX - padL) / plotW * 364)));
+
+      hoverLine.setAttribute("x1", xPix(dayIndex));
+      hoverLine.setAttribute("x2", xPix(dayIndex));
+      hoverLine.setAttribute("visibility", "visible");
+
+      var rows = [tipRow("Average", series.avg[dayIndex]), tipRow("Extreme", series.extreme[dayIndex]),
+                  tipRow("Observed", series.current_year[dayIndex]), tipRow("Forecast", series.forecast[dayIndex])]
+        .filter(function (r) { return r !== null; });
+
+      if (!rows.length) { tip.hidden = true; return; }
+      tip.innerHTML = "<div class=\"hoverDate\">" + doyToLabel(dayIndex + 1) + "</div>" +
+        rows.map(function (r) { return "<div>" + r + "</div>"; }).join("");
+      tip.hidden = false;
+
+      var contRect = container.getBoundingClientRect();
+      var left = evt.clientX - contRect.left + 14, top = evt.clientY - contRect.top + 14;
+      var maxLeft = container.clientWidth - tip.offsetWidth - 8, maxTop = container.clientHeight - tip.offsetHeight - 8;
+      tip.style.left = Math.max(0, Math.min(left, maxLeft)) + "px";
+      tip.style.top = Math.max(0, Math.min(top, maxTop)) + "px";
+    });
+    captureRect.addEventListener("mouseleave", function () {
+      hoverLine.setAttribute("visibility", "hidden");
+      tip.hidden = true;
+    });
+
+    container.appendChild(svg);
+    return true;
+  }
+
+  function renderBandsLegend(index, bands) {
+    els.bandsTitle.textContent = "Percentile bands — " + (manifest.index_labels[index] || index);
+    els.bandsLegend.innerHTML = "";
+    bands.forEach(function (b) {
+      var label = (b.floor === null ? "<" + fmt(b.ceil) : b.ceil === null ? fmt(b.floor) + "+" :
+        fmt(b.floor) + "–" + fmt(b.ceil));
+      var item = document.createElement("span");
+      item.className = "legendItem";
+      var swatch = document.createElement("span");
+      swatch.className = "legendSwatchBox";
+      swatch.style.background = b.color;
+      item.appendChild(swatch);
+      item.appendChild(document.createTextNode(label));
+      els.bandsLegend.appendChild(item);
+    });
+  }
+  function fmt(v) { return Math.round(v * 10) / 10; }
+
+  // ---- controls / render orchestration ------------------------------------
+  function currentEntity(chunk) {
+    if (state.entityKey === "fdra") return chunk.entities[state.fdraId];
+    return chunk.entities[state.entityKey]; // a station id, or the gacc code
+  }
+
+  function populateFdraSelect() {
+    els.fdraSelect.innerHTML = "";
+    var gaccOpt = document.createElement("option");
+    gaccOpt.value = GACC_KEY; gaccOpt.textContent = gacc + " (GACC-wide)";
+    els.fdraSelect.appendChild(gaccOpt);
+    manifest.fdras.forEach(function (f) {
+      var opt = document.createElement("option");
+      opt.value = f.id; opt.textContent = f.name + " (" + f.id + ")";
+      els.fdraSelect.appendChild(opt);
+    });
+    state.fdraId = GACC_KEY;
+    els.fdraSelect.value = state.fdraId;
+  }
+
+  function populateStationSelect() {
+    els.stationSelect.innerHTML = "";
+    if (state.fdraId === GACC_KEY) {
+      var opt = document.createElement("option");
+      opt.value = gacc; opt.textContent = gacc + " rollup (all stations)";
+      els.stationSelect.appendChild(opt);
+      state.entityKey = gacc;
+      els.stationSelect.disabled = true;
+      return;
+    }
+    els.stationSelect.disabled = false;
+    var rollupOpt = document.createElement("option");
+    rollupOpt.value = "fdra"; rollupOpt.textContent = "PSA rollup (all stations in " + state.fdraId + ")";
+    els.stationSelect.appendChild(rollupOpt);
+    manifest.stations.filter(function (s) { return s.fdra === state.fdraId; }).forEach(function (s) {
+      var o = document.createElement("option");
+      o.value = s.id; o.textContent = s.name + " (" + s.id + ")";
+      els.stationSelect.appendChild(o);
+    });
+    state.entityKey = "fdra";
+    els.stationSelect.value = "fdra";
+  }
+
+  function populateIndexPills() {
+    els.indexPills.innerHTML = "";
+    manifest.index_columns.forEach(function (code) {
+      var btn = document.createElement("button");
+      btn.type = "button"; btn.className = "pill"; btn.setAttribute("role", "tab");
+      btn.textContent = manifest.index_labels[code] || code;
+      btn.addEventListener("click", function () {
+        state.index = code;
+        updateIndexPillState();
+        render();
+      });
+      els.indexPills.appendChild(btn);
+    });
+    state.index = manifest.index_columns[0] || null;
+    updateIndexPillState();
+  }
+  function updateIndexPillState() {
+    Array.prototype.forEach.call(els.indexPills.children, function (btn, i) {
+      btn.setAttribute("aria-selected", String(manifest.index_columns[i] === state.index));
+    });
+  }
+
+  function populateMetaLine() {
+    els.metaGacc.textContent = gacc;
+    els.metaStationCount.textContent = String(manifest.stations.length);
+    els.metaFdraCount.textContent = String(manifest.fdras.length);
+    els.metaClimatology.textContent = [manifest.climatology_label, manifest.percentile_filter_label]
+      .filter(function (s) { return s; }).join(", ") || "Climatology multi-year";
+    var generated = new Date(manifest.generated_at_utc);
+    els.metaGenerated.textContent = isNaN(generated) ? manifest.generated_at_utc :
+      generated.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+  }
+
+  function render() {
+    if (!state.index) return;
+    var chunkKey = chunkKeyFor(state.fdraId);
+    els.statusBar.textContent = "Loading " + chunkKey + ".json…";
+    ensureChunkLoaded(chunkKey).then(function (chunk) {
+      var entity = currentEntity(chunk);
+      if (!entity) {
+        els.panelBody.innerHTML = ""; els.panelBody.appendChild(els.panelEmpty);
+        els.panelEmpty.hidden = false;
+        els.statusBar.textContent = "No data for this selection.";
+        return;
+      }
+      var series = entity.series[state.index];
+      els.panelTitle.textContent = entity.name + " — " + (manifest.index_labels[state.index] || state.index);
+      els.panelSub.textContent = entity.level === "station" ? "Station (PSA " + entity.fdra + ")" :
+        entity.level === "fdra" ? "PSA rollup" : "GACC-wide rollup";
+      var ok = series && renderChart(els.panelBody, series);
+      if (!ok) {
+        els.panelBody.innerHTML = ""; els.panelBody.appendChild(els.panelEmpty);
+        els.panelEmpty.hidden = false;
+      } else {
+        els.panelEmpty.hidden = true;
+      }
+      if (series) renderBandsLegend(state.index, series.bands);
+      var obsCount = series ? series.current_year.filter(function (v) { return v !== null; }).length : 0;
+      els.statusBar.textContent = manifest.current_year_range.start + " to " +
+        manifest.current_year_range.latest_observed + " observed (" + obsCount + " day(s) with data), " +
+        "forecast through " + manifest.current_year_range.forecast_through + ".";
+    }).catch(function (err) {
+      els.statusBar.textContent = "Could not load " + chunkKey + ".json: " + err.message;
+    });
+  }
+
+  function wireControls() {
+    els.fdraSelect.addEventListener("change", function () {
+      state.fdraId = els.fdraSelect.value;
+      populateStationSelect();
+      render();
+    });
+    els.stationSelect.addEventListener("change", function () {
+      state.entityKey = els.stationSelect.value;
+      render();
+    });
+  }
+
+  function loadGacc(g) {
+    gacc = g;
+    return fetch(gacc + "/manifest.json").then(function (r) {
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      return r.json();
+    }).then(function (data) {
+      manifest = data;
+      chunkCache = {};
+      els.issuedSub.textContent = gacc + " · " + manifest.current_year_range.start + " to " +
+        manifest.current_year_range.forecast_through;
+      populateMetaLine();
+      populateFdraSelect();
+      populateStationSelect();
+      populateIndexPills();
+      wireControls();
+      els.loadState.hidden = true;
+      els.consoleEl.hidden = false;
+      render();
+    });
+  }
+
+  fetch("gaccs.json").then(function (r) {
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    return r.json();
+  }).then(function (gaccs) {
+    if (!gaccs.length) throw new Error("gaccs.json is empty");
+    var params = new URLSearchParams(window.location.search);
+    var requested = params.get("gacc");
+    return loadGacc(requested && gaccs.indexOf(requested) !== -1 ? requested : gaccs[0]);
+  }).catch(function (err) {
+    els.loadState.textContent = "Could not load data (" + err.message + "). This viewer must be " +
+      "served over http(s):// alongside the gaccs.json/<gacc>/manifest.json/<gacc>/data/ files " +
+      "scripts/fdra_charts_web_export.py wrote -- opening it directly via file:// will not work.";
+  });
+})();
+</script>
+</body>
+</html>
