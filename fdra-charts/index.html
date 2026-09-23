@@ -133,7 +133,18 @@
   .fcastPoint { fill: #2f9e44; }
   .obsPoint { fill: #2a78d6; }
   .breakpointLine { stroke: var(--text-dim); stroke-width: 1; stroke-dasharray: 3 3; opacity: 0.85; }
-  .crosshair { stroke: var(--text-dim); stroke-width: 1; stroke-dasharray: 2 2; }
+  .crosshair { stroke: var(--text-dim); stroke-width: 1; stroke-dasharray: 2 2; pointer-events: none; }
+  .avgLine, .extremeLine, .obsLine, .fcastLine, .breakpointLine, .gridLine { pointer-events: none; }
+  /* Fire event dots -- scripts/FDRACharts.py plots these as black alpha=0.5 circles sized by
+     fire size class; var(--text) keeps them the same "ink" color in dark mode. */
+  .fireDot { fill: var(--text); fill-opacity: 0.32; stroke: var(--text); stroke-opacity: 0.6; stroke-width: 0.7; cursor: pointer; }
+  .fireDot:hover { fill: #e8590c; fill-opacity: 0.9; stroke: #e8590c; }
+  .legendSwatchDot { display: inline-block; border-radius: 50%; background: var(--text); opacity: 0.55; }
+  .checkRow { display: flex; align-items: center; gap: 6px; font-size: 12.5px; min-height: 29px; cursor: pointer; }
+  .checkRow input { margin: 0; accent-color: var(--accent); }
+  select.narrow { min-width: 110px; }
+  .fireRow { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .hoverTip .fireName { font-weight: 650; }
 
   @media (max-width: 760px) {
     select { min-width: 0; width: 100%; }
@@ -163,6 +174,14 @@
           <span class="fieldLabel">Index</span>
           <div class="pillRow" id="indexPills" role="tablist" aria-label="Index"></div>
         </div>
+        <div class="field" id="fireField" hidden>
+          <span class="fieldLabel">Historical fires</span>
+          <div class="fireRow">
+            <label class="checkRow"><input type="checkbox" id="fireShow" checked>Show</label>
+            <select id="fireMinClass" class="narrow" aria-label="Minimum fire size class"></select>
+            <select id="fireYear" class="narrow" aria-label="Fire year"></select>
+          </div>
+        </div>
       </div>
 
       <div class="panel">
@@ -184,6 +203,10 @@
           <div class="legendGroup">
             <span class="legendGroupTitle" id="bandsTitle">Percentile bands</span>
             <div class="legendItems" id="bandsLegend"></div>
+          </div>
+          <div class="legendGroup" id="fireLegendGroup" hidden>
+            <span class="legendGroupTitle">Fire size class</span>
+            <div class="legendItems" id="fireLegend"></div>
           </div>
         </div>
       </div>
@@ -218,6 +241,14 @@
             <p><strong>Current year / forecast:</strong> the blue line is this year's actual
             observed daily value through the most recent FEMS observation; the green line
             is FEMS's current 7-day forecast, picking up where the observed line leaves off.</p>
+            <p><strong>Historical fires:</strong> each dot is a fire, placed at its discovery date
+            and at the index value actually observed that day at this station (or averaged across
+            the PSA/GACC for a rollup chart). It is not placed on the average line, so a dot's
+            height shows how the fire's start day compared with climatology. Dot size is fire size
+            class; fires discovered the same day share one dot. Only fires inside the climatology
+            window can plot, since each dot needs an observation on its date. Station charts show
+            every fire in that station's PSA. Hover a dot for the fire name(s), acreage and
+            percentile.</p>
           </div>
         </details>
       </div>
@@ -253,11 +284,24 @@
     metaFdraCount: document.getElementById("metaFdraCount"),
     metaClimatology: document.getElementById("metaClimatology"),
     metaGenerated: document.getElementById("metaGenerated"),
+    fireField: document.getElementById("fireField"),
+    fireShow: document.getElementById("fireShow"),
+    fireMinClass: document.getElementById("fireMinClass"),
+    fireYear: document.getElementById("fireYear"),
+    fireLegendGroup: document.getElementById("fireLegendGroup"),
+    fireLegend: document.getElementById("fireLegend"),
   };
 
   var manifest = null, gacc = null;
   var chunkCache = {}; // chunkKey ("_gacc" or an fdra id) -> parsed chunk
-  var state = { fdraId: GACC_KEY, entityKey: null, index: null };
+  var state = { fdraId: GACC_KEY, entityKey: null, index: null,
+                fireShow: true, fireMinClass: null, fireYear: "all" };
+
+  // Dot radius (SVG viewBox units) per fire size class -- same A-smallest..G-largest ordering
+  // as scripts/FDRACharts.py's _get_marker_size_for_class(), rescaled for a 900-wide chart.
+  var FIRE_CLASS_RADIUS = { A: 1.5, B: 2, C: 2.8, D: 3.8, E: 5, F: 6.5, G: 8.5 };
+  var FIRE_DEFAULT_RADIUS = 2.4;
+  var FIRE_TIP_MAX_NAMES = 10;
 
   // ---- data loading -------------------------------------------------------
   function chunkKeyFor(fdraId) { return fdraId === GACC_KEY ? "_gacc" : fdraId; }
@@ -343,7 +387,55 @@
   }
   function fmtPct(p) { return String(Math.round(p * 10) / 10); }
 
-  function renderChart(container, series) {
+  // ---- fire event overlay -------------------------------------------------
+  function escapeHtml(text) {
+    return String(text).replace(/[&<>"']/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;" }[c];
+    });
+  }
+  function fireClassRank(cls) {
+    var classes = manifest.fires ? manifest.fires.size_classes : [];
+    for (var i = 0; i < classes.length; i++) if (classes[i]["class"] === cls) return i;
+    return -1;
+  }
+  // "2020-08-13" -> leap-folded day-of-year. MONTH_START_DOY is the non-leap table, which gives
+  // exactly the export's leap_adjusted_doy() result for every date, Feb 29 included (it lands
+  // on 60, same as scripts/FDRACharts.py's _lookup_fire_event_plot_point()).
+  function isoToDoy(iso) { return MONTH_START_DOY[+iso.slice(5, 7) - 1] + (+iso.slice(8, 10)) - 1; }
+  function isoToLabel(iso) { return MONTH_LABELS[+iso.slice(5, 7) - 1] + " " + (+iso.slice(8, 10)) + ", " + iso.slice(0, 4); }
+  function fmtAcres(a) { return a === null || a === undefined ? "acres n/a" : Math.round(a).toLocaleString() + " ac"; }
+
+  // chunk.fires ([date, name, acres, class] rows) + this series' parallel fire_values ->
+  // one group per discovery date (fires found the same day share a dot, like
+  // scripts/FDRACharts.py's events_by_year_doy grouping), after the size-class/year filters.
+  // Dot height = mean of the group's values, size = its largest class. Sorted largest-first so
+  // small dots draw on top and stay hoverable.
+  function buildFireGroups(chunkFires, fireValues) {
+    var minRank = fireClassRank(state.fireMinClass), byDate = {}, groups = [];
+    chunkFires.forEach(function (f, i) {
+      var value = fireValues[i];
+      if (value === null || value === undefined) return;
+      if (state.fireYear !== "all" && f[0].slice(0, 4) !== state.fireYear) return;
+      if (minRank > 0 && fireClassRank(f[3]) < minRank) return;
+      var g = byDate[f[0]];
+      if (!g) { g = byDate[f[0]] = { date: f[0], fires: [], values: [], rank: -1, cls: null }; groups.push(g); }
+      g.fires.push({ name: f[1], acres: f[2], cls: f[3] });
+      g.values.push(value);
+      var rank = fireClassRank(f[3]);
+      if (rank > g.rank) { g.rank = rank; g.cls = f[3]; }
+    });
+    groups.forEach(function (g) {
+      g.value = g.values.reduce(function (a, b) { return a + b; }, 0) / g.values.length;
+      g.doy = isoToDoy(g.date);
+      g.radius = FIRE_CLASS_RADIUS[g.cls] || FIRE_DEFAULT_RADIUS;
+      g.fires.sort(function (a, b) { return (b.acres || 0) - (a.acres || 0); });
+    });
+    groups.sort(function (a, b) { return b.radius - a.radius; });
+    return groups;
+  }
+  function fireCount(groups) { return groups.reduce(function (n, g) { return n + g.fires.length; }, 0); }
+
+  function renderChart(container, series, fireGroups) {
     container.innerHTML = "";
     var W = 900, H = 380, padL = 42, padR = 46, padT = 18, padB = 24;
     var plotW = W - padL - padR, plotH = H - padT - padB;
@@ -418,6 +510,16 @@
       svg.appendChild(lbl);
     });
 
+    // Crosshair capture rect + fire dots sit UNDER the data lines, so a dense fire cloud (the
+    // GACC-wide chart has ~1,900 dots at Class C+) never hides the current-year/forecast lines.
+    // The lines are pointer-events:none (see CSS), so hovering still reaches the dots and the
+    // capture rect through them.
+    var captureRect = svgEl("rect", { x: padL, y: padT, width: plotW, height: plotH, fill: "transparent" });
+    captureRect.style.cursor = "crosshair";
+    svg.appendChild(captureRect);
+    var fireLayer = svgEl("g", {});
+    svg.appendChild(fireLayer);
+
     function addPathGroup(values, cssClass) {
       linePaths(values, xPix, yPix).forEach(function (d) {
         svg.appendChild(svgEl("path", { d: d, class: cssClass }));
@@ -455,9 +557,6 @@
     // series' own percentile_points), e.g. "Average: BI 22.4 (64th percentile)".
     var hoverLine = svgEl("line", { x1: 0, x2: 0, y1: padT, y2: H - padB, class: "crosshair", visibility: "hidden" });
     svg.appendChild(hoverLine);
-    var captureRect = svgEl("rect", { x: padL, y: padT, width: plotW, height: plotH, fill: "transparent" });
-    captureRect.style.cursor = "crosshair";
-    svg.appendChild(captureRect);
 
     var tip = document.createElement("div");
     tip.className = "hoverTip";
@@ -469,6 +568,38 @@
       var pct = percentileForValue(series.percentile_points, value);
       var pctStr = pct === null ? "" : " (" + fmtPct(pct) + "th percentile)";
       return label + ": " + state.index + " " + fmt(value) + pctStr;
+    }
+
+    function placeTip(evt) {
+      var contRect = container.getBoundingClientRect();
+      var left = evt.clientX - contRect.left + 14, top = evt.clientY - contRect.top + 14;
+      var maxLeft = container.clientWidth - tip.offsetWidth - 8, maxTop = container.clientHeight - tip.offsetHeight - 8;
+      tip.style.left = Math.max(0, Math.min(left, maxLeft)) + "px";
+      tip.style.top = Math.max(0, Math.min(top, maxTop)) + "px";
+    }
+
+    // Each fire dot gets its own hover; the day-crosshair tooltip resumes as soon as the
+    // pointer leaves the dot.
+    if (fireGroups && fireGroups.length) {
+      fireGroups.forEach(function (g) {
+        var dot = svgEl("circle", { cx: xPix(g.doy - 1), cy: yPix(clip(g.value)), r: g.radius, class: "fireDot" });
+        dot.addEventListener("mouseenter", function (evt) {
+          hoverLine.setAttribute("visibility", "hidden");
+          var names = g.fires.slice(0, FIRE_TIP_MAX_NAMES).map(function (f) {
+            return "<div><span class=\"fireName\">" + escapeHtml(f.name) + "</span> &middot; " + fmtAcres(f.acres) +
+              (f.cls ? " (Class " + escapeHtml(f.cls) + ")" : "") + "</div>";
+          });
+          if (g.fires.length > FIRE_TIP_MAX_NAMES) names.push("<div>+" + (g.fires.length - FIRE_TIP_MAX_NAMES) + " more</div>");
+          tip.innerHTML = "<div class=\"hoverDate\">" + isoToLabel(g.date) + " &middot; " +
+            (g.fires.length === 1 ? "1 fire" : g.fires.length + " fires") + "</div>" + names.join("") +
+            "<div>" + tipRow(g.fires.length > 1 ? "Discovery day (avg)" : "Discovery day", g.value) + "</div>";
+          tip.hidden = false;
+          placeTip(evt);
+        });
+        dot.addEventListener("mousemove", placeTip);
+        dot.addEventListener("mouseleave", function () { tip.hidden = true; });
+        fireLayer.appendChild(dot);
+      });
     }
 
     captureRect.addEventListener("mousemove", function (evt) {
@@ -488,12 +619,7 @@
       tip.innerHTML = "<div class=\"hoverDate\">" + doyToLabel(dayIndex + 1) + "</div>" +
         rows.map(function (r) { return "<div>" + r + "</div>"; }).join("");
       tip.hidden = false;
-
-      var contRect = container.getBoundingClientRect();
-      var left = evt.clientX - contRect.left + 14, top = evt.clientY - contRect.top + 14;
-      var maxLeft = container.clientWidth - tip.offsetWidth - 8, maxTop = container.clientHeight - tip.offsetHeight - 8;
-      tip.style.left = Math.max(0, Math.min(left, maxLeft)) + "px";
-      tip.style.top = Math.max(0, Math.min(top, maxTop)) + "px";
+      placeTip(evt);
     });
     captureRect.addEventListener("mouseleave", function () {
       hoverLine.setAttribute("visibility", "hidden");
@@ -521,6 +647,60 @@
     });
   }
   function fmt(v) { return Math.round(v * 10) / 10; }
+
+  function renderFireLegend(visible) {
+    els.fireLegendGroup.hidden = !visible;
+    if (!visible) return;
+    els.fireLegend.innerHTML = "";
+    var minRank = fireClassRank(state.fireMinClass);
+    manifest.fires.size_classes.forEach(function (sc, i) {
+      if (i < minRank) return;
+      var r = FIRE_CLASS_RADIUS[sc["class"]] || FIRE_DEFAULT_RADIUS;
+      var item = document.createElement("span");
+      item.className = "legendItem";
+      var dot = document.createElement("span");
+      dot.className = "legendSwatchDot";
+      dot.style.width = dot.style.height = (2 * r) + "px";
+      item.appendChild(dot);
+      item.appendChild(document.createTextNode(sc["class"] + " (" + fmtClassRange(sc) + ")"));
+      els.fireLegend.appendChild(item);
+    });
+  }
+  function fmtClassRange(sc) {
+    if (sc.max_acres >= 1e8) return Math.round(sc.min_acres).toLocaleString() + "+ ac";
+    return sc.min_acres.toLocaleString() + "–" + sc.max_acres.toLocaleString() + " ac";
+  }
+
+  function populateFireControls() {
+    var on = !!(manifest.fires && manifest.fires.size_classes && manifest.fires.size_classes.length);
+    els.fireField.hidden = !on;
+    if (!on) return;
+    var classes = manifest.fires.size_classes;
+    var startRank = Math.max(0, fireClassRank(manifest.fires.min_size_class));
+    els.fireMinClass.innerHTML = "";
+    classes.forEach(function (sc, i) {
+      if (i < startRank) return;
+      var opt = document.createElement("option");
+      opt.value = sc["class"];
+      opt.textContent = "Class " + sc["class"] + (i < classes.length - 1 ? "+" : "") + " (" +
+        Math.round(sc.min_acres).toLocaleString() + "+ ac)";
+      els.fireMinClass.appendChild(opt);
+    });
+    state.fireMinClass = classes[startRank]["class"];
+    els.fireMinClass.value = state.fireMinClass;
+    els.fireYear.innerHTML = "";
+    var allOpt = document.createElement("option");
+    allOpt.value = "all"; allOpt.textContent = "All years";
+    els.fireYear.appendChild(allOpt);
+    manifest.fires.years.slice().reverse().forEach(function (y) {
+      var opt = document.createElement("option");
+      opt.value = String(y); opt.textContent = String(y);
+      els.fireYear.appendChild(opt);
+    });
+    state.fireYear = "all";
+    els.fireYear.value = "all";
+    els.fireShow.checked = state.fireShow;
+  }
 
   // ---- controls / render orchestration ------------------------------------
   function currentEntity(chunk) {
@@ -614,7 +794,10 @@
       els.panelTitle.textContent = entity.name + " — " + (manifest.index_labels[state.index] || state.index);
       els.panelSub.textContent = entity.level === "station" ? "Station (PSA " + entity.fdra + ")" :
         entity.level === "fdra" ? "PSA rollup" : "GACC-wide rollup";
-      var ok = series && renderChart(els.panelBody, series);
+      var fireGroups = (manifest.fires && state.fireShow && chunk.fires && series && series.fire_values) ?
+        buildFireGroups(chunk.fires, series.fire_values) : null;
+      var ok = series && renderChart(els.panelBody, series, fireGroups);
+      renderFireLegend(!!(ok && fireGroups));
       if (!ok) {
         els.panelBody.innerHTML = ""; els.panelBody.appendChild(els.panelEmpty);
         els.panelEmpty.hidden = false;
@@ -625,7 +808,9 @@
       var obsCount = series ? series.current_year.filter(function (v) { return v !== null; }).length : 0;
       els.statusBar.textContent = manifest.current_year_range.start + " to " +
         manifest.current_year_range.latest_observed + " observed (" + obsCount + " day(s) with data), " +
-        "forecast through " + manifest.current_year_range.forecast_through + ".";
+        "forecast through " + manifest.current_year_range.forecast_through + "." +
+        (fireGroups ? " " + fireCount(fireGroups).toLocaleString() + " fire(s) shown (Class " + state.fireMinClass +
+          "+, " + (state.fireYear === "all" ? "all years" : state.fireYear) + ")." : "");
     }).catch(function (err) {
       els.statusBar.textContent = "Could not load " + chunkKey + ".json: " + err.message;
     });
@@ -641,6 +826,13 @@
       state.entityKey = els.stationSelect.value;
       render();
     });
+    els.fireShow.addEventListener("change", function () {
+      state.fireShow = els.fireShow.checked;
+      els.fireMinClass.disabled = els.fireYear.disabled = !state.fireShow;
+      render();
+    });
+    els.fireMinClass.addEventListener("change", function () { state.fireMinClass = els.fireMinClass.value; render(); });
+    els.fireYear.addEventListener("change", function () { state.fireYear = els.fireYear.value; render(); });
   }
 
   function loadGacc(g) {
@@ -657,6 +849,7 @@
       populateFdraSelect();
       populateStationSelect();
       populateIndexPills();
+      populateFireControls();
       wireControls();
       els.loadState.hidden = true;
       els.consoleEl.hidden = false;
