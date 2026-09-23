@@ -39,6 +39,9 @@
   }
 
   * { box-sizing: border-box; }
+  /* .field/.legendGroup/.legendItem set display:flex, which would otherwise beat the hidden
+     attribute the fire/year controls use to hide them. */
+  [hidden] { display: none !important; }
   html, body { margin: 0; padding: 0; }
   body {
     background: var(--bg); color: var(--text);
@@ -130,11 +133,13 @@
   .extremeLine { stroke: #d1352b; stroke-width: 1.6; fill: none; }
   .obsLine { stroke: #2a78d6; stroke-width: 2; fill: none; }
   .fcastLine { stroke: #2f9e44; stroke-width: 2; fill: none; }
+  /* Past-year overlay: purple dashed, same as scripts/FDRACharts.py's overlay_year line. */
+  .pastYearLine { stroke: #7b2cbf; stroke-width: 2; stroke-dasharray: 5 3; fill: none; }
   .fcastPoint { fill: #2f9e44; }
   .obsPoint { fill: #2a78d6; }
   .breakpointLine { stroke: var(--text-dim); stroke-width: 1; stroke-dasharray: 3 3; opacity: 0.85; }
   .crosshair { stroke: var(--text-dim); stroke-width: 1; stroke-dasharray: 2 2; pointer-events: none; }
-  .avgLine, .extremeLine, .obsLine, .fcastLine, .breakpointLine, .gridLine { pointer-events: none; }
+  .avgLine, .extremeLine, .obsLine, .fcastLine, .pastYearLine, .breakpointLine, .gridLine { pointer-events: none; }
   /* Fire event dots -- scripts/FDRACharts.py plots these as black alpha=0.5 circles sized by
      fire size class; var(--text) keeps them the same "ink" color in dark mode. */
   .fireDot { fill: var(--text); fill-opacity: 0.32; stroke: var(--text); stroke-opacity: 0.6; stroke-width: 0.7; cursor: pointer; }
@@ -171,6 +176,10 @@
           <select id="stationSelect"></select>
         </div>
         <div class="field">
+          <span class="fieldLabel">Year</span>
+          <select id="overlayYear" class="narrow" aria-label="Year to overlay"></select>
+        </div>
+        <div class="field">
           <span class="fieldLabel">Index</span>
           <div class="pillRow" id="indexPills" role="tablist" aria-label="Index"></div>
         </div>
@@ -196,8 +205,8 @@
             <div class="legendItems">
               <span class="legendItem"><span class="legendSwatchLine" style="border-color:#8a8a8a"></span>Historical average</span>
               <span class="legendItem"><span class="legendSwatchLine" style="border-color:#d1352b"></span>Historical extreme</span>
-              <span class="legendItem"><span class="legendSwatchLine" style="border-color:#2a78d6"></span>Current year (observed)</span>
-              <span class="legendItem"><span class="legendSwatchLine" style="border-color:#2f9e44"></span>Forecast (+7d)</span>
+              <span class="legendItem"><span class="legendSwatchLine" id="obsSwatch" style="border-color:#2a78d6"></span><span id="obsLegendText">Current year (observed)</span></span>
+              <span class="legendItem" id="fcastLegendItem"><span class="legendSwatchLine" style="border-color:#2f9e44"></span>Forecast (+7d)</span>
             </div>
           </div>
           <div class="legendGroup">
@@ -245,6 +254,10 @@
             <p><strong>Current year / forecast:</strong> the blue line is this year's actual
             observed daily value through the most recent FEMS observation; the green line
             is FEMS's current 7-day forecast, picking up where the observed line leaves off.</p>
+            <p><strong>Year:</strong> defaults to the current year (observed + forecast). Picking a
+            past year swaps in that year's observed daily values as a purple dashed line (no
+            forecast) against the same climatology, e.g. to compare this season with 2020 or 2021.
+            A station has no line for years before its period of record.</p>
             <p><strong>Historical fires:</strong> each dot is a fire, placed at its discovery date
             and at the index value actually observed that day at this station (or averaged across
             the PSA/GACC for a rollup chart). It is not placed on the average line, so a dot's
@@ -294,12 +307,17 @@
     fireYear: document.getElementById("fireYear"),
     fireLegendGroup: document.getElementById("fireLegendGroup"),
     fireLegend: document.getElementById("fireLegend"),
+    overlayYear: document.getElementById("overlayYear"),
+    obsSwatch: document.getElementById("obsSwatch"),
+    obsLegendText: document.getElementById("obsLegendText"),
+    fcastLegendItem: document.getElementById("fcastLegendItem"),
   };
 
   var manifest = null, gacc = null;
   var chunkCache = {}; // chunkKey ("_gacc" or an fdra id) -> parsed chunk
   var state = { fdraId: GACC_KEY, entityKey: null, index: null,
-                fireShow: true, fireMinClass: null, fireYear: "all" };
+                fireShow: true, fireMinClass: null, fireYear: "all", overlayYear: null };
+  var yearCache = {}; // "<year>/<chunkKey>" -> promise of that past year's chunk
 
   // Dot radius (SVG viewBox units) per fire size class -- same A-smallest..G-largest ordering
   // as scripts/FDRACharts.py's _get_marker_size_for_class(), rescaled for a 900-wide chart.
@@ -320,6 +338,22 @@
       return chunk;
     });
   }
+
+  // Past-year observed series, <gacc>/years/<year>/<chunkKey>.json (written by
+  // scripts/fdra_charts_web_export.py's write_year_files()) -- fetched only when that year is
+  // picked. A 404 (e.g. a PSA with no data at all that year) resolves to an empty chunk.
+  function ensureYearLoaded(year, chunkKey) {
+    var key = year + "/" + chunkKey;
+    if (!(key in yearCache)) {
+      yearCache[key] = fetch(gacc + "/years/" + key + ".json").then(function (r) {
+        if (r.status === 404) return { year: +year, entities: {} };
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        return r.json();
+      }).catch(function (err) { delete yearCache[key]; throw err; });
+    }
+    return yearCache[key];
+  }
+  function isPastYear() { return state.overlayYear !== String(manifest.year); }
 
   // ---- SVG rendering -------------------------------------------------------
   var SVG_NS = "http://www.w3.org/2000/svg";
@@ -448,7 +482,7 @@
     return isoToLabel(record.start) + " \u2013 " + isoToLabel(record.end) + " (" + (Math.round(yrs * 10) / 10) + " yrs)";
   }
 
-  function renderChart(container, series, fireGroups, record) {
+  function renderChart(container, series, fireGroups, record, pastYear) {
     container.innerHTML = "";
     var W = 900, H = 380, padL = 42, padR = 46, padT = 18, padB = 24;
     var plotW = W - padL - padR, plotH = H - padT - padB;
@@ -546,9 +580,10 @@
     }
     addPathGroup(series.avg, "avgLine");
     addPathGroup(series.extreme, "extremeLine");
-    addPathGroup(series.current_year, "obsLine");
+    addPathGroup(series.current_year, pastYear ? "pastYearLine" : "obsLine");
 
-    var lastObsIdx = lastNonNullIndex(series.current_year);
+    // Latest-observed dot + forecast only exist for the current year.
+    var lastObsIdx = pastYear ? -1 : lastNonNullIndex(series.current_year);
     if (lastObsIdx !== -1) {
       var pt = svgEl("circle", { cx: xPix(lastObsIdx), cy: yPix(series.current_year[lastObsIdx]), r: 2.6, class: "obsPoint" });
       pt.appendChild(svgEl("title", {})).textContent = "Latest observed: " + series.current_year[lastObsIdx];
@@ -631,7 +666,8 @@
       hoverLine.setAttribute("visibility", "visible");
 
       var rows = [tipRow("Average", series.avg[dayIndex]), tipRow("Extreme", series.extreme[dayIndex]),
-                  tipRow("Observed", series.current_year[dayIndex]), tipRow("Forecast", series.forecast[dayIndex])]
+                  tipRow(pastYear ? String(pastYear) : "Observed", series.current_year[dayIndex]),
+                  tipRow("Forecast", series.forecast[dayIndex])]
         .filter(function (r) { return r !== null; });
 
       if (!rows.length) { tip.hidden = true; return; }
@@ -688,6 +724,28 @@
   function fmtClassRange(sc) {
     if (sc.max_acres >= 1e8) return Math.round(sc.min_acres).toLocaleString() + "+ ac";
     return sc.min_acres.toLocaleString() + "–" + sc.max_acres.toLocaleString() + " ac";
+  }
+
+  function populateYearSelect() {
+    els.overlayYear.innerHTML = "";
+    var cur = document.createElement("option");
+    cur.value = String(manifest.year); cur.textContent = manifest.year + " (current)";
+    els.overlayYear.appendChild(cur);
+    (manifest.overlay_years || []).slice().reverse().forEach(function (y) {
+      if (y === manifest.year) return;
+      var opt = document.createElement("option");
+      opt.value = String(y); opt.textContent = String(y);
+      els.overlayYear.appendChild(opt);
+    });
+    state.overlayYear = String(manifest.year);
+    els.overlayYear.value = state.overlayYear;
+  }
+  function updateLineLegend() {
+    var past = isPastYear();
+    els.obsLegendText.textContent = past ? state.overlayYear + " (observed)" : "Current year (observed)";
+    els.obsSwatch.style.borderColor = past ? "#7b2cbf" : "#2a78d6";
+    els.obsSwatch.style.borderTopStyle = past ? "dashed" : "solid";
+    els.fcastLegendItem.hidden = past;
   }
 
   function populateFireControls() {
@@ -801,7 +859,9 @@
     if (!state.index) return;
     var chunkKey = chunkKeyFor(state.fdraId);
     els.statusBar.textContent = "Loading " + chunkKey + ".json…";
-    ensureChunkLoaded(chunkKey).then(function (chunk) {
+    var pastYear = isPastYear() ? state.overlayYear : null;
+    Promise.all([ensureChunkLoaded(chunkKey), pastYear ? ensureYearLoaded(pastYear, chunkKey) : null]).then(function (loaded) {
+      var chunk = loaded[0], yearChunk = loaded[1];
       var entity = currentEntity(chunk);
       if (!entity) {
         els.panelBody.innerHTML = ""; els.panelBody.appendChild(els.panelEmpty);
@@ -810,13 +870,22 @@
         return;
       }
       var series = entity.series[state.index];
+      var entityId = state.entityKey === "fdra" ? state.fdraId : state.entityKey;
+      if (series && pastYear) {
+        // Same climatology/bands/fires, but the observed line is the picked year's and there
+        // is no forecast. Missing entity/index (before the station's record) = all-null line.
+        var yearEntity = yearChunk.entities[entityId] || {};
+        var nulls = series.forecast.map(function () { return null; });
+        series = Object.assign({}, series, { current_year: yearEntity[state.index] || nulls, forecast: nulls });
+      }
+      updateLineLegend();
       els.panelTitle.textContent = entity.name + " — " + (manifest.index_labels[state.index] || state.index);
       els.panelSub.textContent = (entity.level === "station" ? "Station (PSA " + entity.fdra + ")" :
         entity.level === "fdra" ? "PSA rollup" : "GACC-wide rollup") +
         (entity.record ? " \u00b7 Period of record " + recordLabel(entity.record) : "");
       var fireGroups = (manifest.fires && state.fireShow && chunk.fires && series && series.fire_values) ?
         buildFireGroups(chunk.fires, series.fire_values) : null;
-      var ok = series && renderChart(els.panelBody, series, fireGroups, entity.record);
+      var ok = series && renderChart(els.panelBody, series, fireGroups, entity.record, pastYear);
       renderFireLegend(!!(ok && fireGroups));
       if (!ok) {
         els.panelBody.innerHTML = ""; els.panelBody.appendChild(els.panelEmpty);
@@ -826,13 +895,17 @@
       }
       if (series) renderBandsLegend(state.index, series.bands);
       var obsCount = series ? series.current_year.filter(function (v) { return v !== null; }).length : 0;
-      els.statusBar.textContent = manifest.current_year_range.start + " to " +
+      els.statusBar.textContent = (pastYear ?
+        (obsCount ? pastYear + " observed (" + obsCount + " day(s) with data)." :
+          "No " + pastYear + " observations for " + entity.name +
+          (entity.record ? " (period of record starts " + isoToLabel(entity.record.start) + ")." : ".")) :
+        manifest.current_year_range.start + " to " +
         manifest.current_year_range.latest_observed + " observed (" + obsCount + " day(s) with data), " +
-        "forecast through " + manifest.current_year_range.forecast_through + "." +
+        "forecast through " + manifest.current_year_range.forecast_through + ".") +
         (fireGroups ? " " + fireCount(fireGroups).toLocaleString() + " fire(s) shown (Class " + state.fireMinClass +
           "+, " + (state.fireYear === "all" ? "all years" : state.fireYear) + ")." : "");
     }).catch(function (err) {
-      els.statusBar.textContent = "Could not load " + chunkKey + ".json: " + err.message;
+      els.statusBar.textContent = "Could not load " + (pastYear ? pastYear + "/" : "") + chunkKey + ".json: " + err.message;
     });
   }
 
@@ -851,6 +924,7 @@
       els.fireMinClass.disabled = els.fireYear.disabled = !state.fireShow;
       render();
     });
+    els.overlayYear.addEventListener("change", function () { state.overlayYear = els.overlayYear.value; render(); });
     els.fireMinClass.addEventListener("change", function () { state.fireMinClass = els.fireMinClass.value; render(); });
     els.fireYear.addEventListener("change", function () { state.fireYear = els.fireYear.value; render(); });
   }
@@ -863,12 +937,14 @@
     }).then(function (data) {
       manifest = data;
       chunkCache = {};
+      yearCache = {};
       els.issuedSub.textContent = gacc + " · " + manifest.current_year_range.start + " to " +
         manifest.current_year_range.forecast_through;
       populateMetaLine();
       populateFdraSelect();
       populateStationSelect();
       populateIndexPills();
+      populateYearSelect();
       populateFireControls();
       wireControls();
       els.loadState.hidden = true;
