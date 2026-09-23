@@ -238,6 +238,10 @@
             <p><strong>Historical average/extreme:</strong> the gray line is the mean value for
             that calendar day across every year in the historical window; the red line is that
             same day's most extreme (driest, or highest danger) value ever recorded.</p>
+            <p><strong>Period of record:</strong> the dates printed above each chart are the
+            first and last day that station (or PSA/GACC rollup) actually has data. Many RAWS
+            were installed after the climatology window's start, so their average, extreme,
+            percentile bands and fire dots cover only those years.</p>
             <p><strong>Current year / forecast:</strong> the blue line is this year's actual
             observed daily value through the most recent FEMS observation; the green line
             is FEMS's current 7-day forecast, picking up where the observed line leaves off.</p>
@@ -435,7 +439,16 @@
   }
   function fireCount(groups) { return groups.reduce(function (n, g) { return n + g.fires.length; }, 0); }
 
-  function renderChart(container, series, fireGroups) {
+  // entity.record ({start, end, days}, the chart's ACTUAL historical period of record from its
+  // raw daily file) -> "Mar 2, 2007 – Dec 31, 2025 (18.8 yrs)". Many stations start well after
+  // the GACC-wide climatology start, so each chart states its own range.
+  function recordLabel(record) {
+    if (!record) return null;
+    var yrs = (Date.parse(record.end) - Date.parse(record.start)) / (365.25 * 86400000) + 1 / 365.25;
+    return isoToLabel(record.start) + " \u2013 " + isoToLabel(record.end) + " (" + (Math.round(yrs * 10) / 10) + " yrs)";
+  }
+
+  function renderChart(container, series, fireGroups, record) {
     container.innerHTML = "";
     var W = 900, H = 380, padL = 42, padR = 46, padT = 18, padB = 24;
     var plotW = W - padL - padR, plotH = H - padT - padB;
@@ -486,6 +499,12 @@
     var pctHdr = svgEl("text", { x: W - padR, y: padT - 6, "text-anchor": "end", "font-size": "9", "font-weight": "700" });
     pctHdr.textContent = "PERCENTILE";
     svg.appendChild(pctHdr);
+    var recLbl = recordLabel(record);
+    if (recLbl) {
+      var recHdr = svgEl("text", { x: padL + plotW / 2, y: padT - 6, "text-anchor": "middle", "font-size": "9.5" });
+      recHdr.textContent = "Period of record: " + recLbl + ", " + record.days.toLocaleString() + " days";
+      svg.appendChild(recHdr);
+    }
 
     // Percentile breakpoint reference lines (scripts/FDRACharts.py's own axhline-style
     // threshold lines) -- each one's right-axis label is that breakpoint's real historical
@@ -792,11 +811,12 @@
       }
       var series = entity.series[state.index];
       els.panelTitle.textContent = entity.name + " — " + (manifest.index_labels[state.index] || state.index);
-      els.panelSub.textContent = entity.level === "station" ? "Station (PSA " + entity.fdra + ")" :
-        entity.level === "fdra" ? "PSA rollup" : "GACC-wide rollup";
+      els.panelSub.textContent = (entity.level === "station" ? "Station (PSA " + entity.fdra + ")" :
+        entity.level === "fdra" ? "PSA rollup" : "GACC-wide rollup") +
+        (entity.record ? " \u00b7 Period of record " + recordLabel(entity.record) : "");
       var fireGroups = (manifest.fires && state.fireShow && chunk.fires && series && series.fire_values) ?
         buildFireGroups(chunk.fires, series.fire_values) : null;
-      var ok = series && renderChart(els.panelBody, series, fireGroups);
+      var ok = series && renderChart(els.panelBody, series, fireGroups, entity.record);
       renderFireLegend(!!(ok && fireGroups));
       if (!ok) {
         els.panelBody.innerHTML = ""; els.panelBody.appendChild(els.panelEmpty);
