@@ -273,15 +273,16 @@
             window can plot, since each dot needs an observation on its date. Station charts show
             every fire in that station's PSA. Hover a dot for the fire name(s), acreage and
             percentile.</p>
-            <p><strong>Fire cause:</strong> the fire records carry FireFamily Plus's 9-code
-            statistical cause (1 Lightning through 9 Miscellaneous). Each is shown with its
-            current NWCG General Cause and Cause Classification (NWCG PMS 910), using the
-            crosswalk the FDRA_FODR_FOD tool applied when it built these records. Most codes match
-            one NWCG general cause. Two combine several: code 2 is Equipment and Vehicle Use
-            <em>or</em> Power Generation/Transmission/Distribution, and code 9 (Miscellaneous) is
-            Undetermined, Firearms and Explosives Use, Fireworks, or Other Causes. For those the
-            single NWCG cause can't be recovered from this data. "Human-caused" in the cause
-            filter means codes 2&ndash;8 only, since a code 9 fire may be Undetermined.</p>
+            <p><strong>Fire cause:</strong> each fire shows its FireFamily Plus statistical cause
+            (1 Lightning through 9 Miscellaneous, the code FireFamily Plus analyses use) and its
+            NWCG cause (PMS 910). When the fire data carries each fire's own NWCG Cause
+            Classification, General Cause and, for InFORM FODR records, Specific Cause, those are
+            shown exactly. The cause filter then offers NWCG class and general-cause options. With
+            older data that has only the FF+ code, the NWCG cause is the FF+ code's crosswalk. That
+            is exact for most codes but ambiguous for two: code 2 is Equipment and Vehicle Use
+            <em>or</em> Power Generation/Transmission/Distribution, and code 9 is Undetermined,
+            Firearms and Explosives Use, Fireworks, or Other Causes. For that older data,
+            "Human-caused" means codes 2&ndash;8 only.</p>
           </div>
         </details>
       </div>
@@ -473,10 +474,11 @@
       if (value === null || value === undefined) return;
       if (state.fireYear !== "all" && f[0].slice(0, 4) !== state.fireYear) return;
       if (minRank > 0 && fireClassRank(f[3]) < minRank) return;
-      if (!causeMatches(f[4])) return;
+      if (!causeMatches(f)) return;
       var g = byDate[f[0]];
       if (!g) { g = byDate[f[0]] = { date: f[0], fires: [], values: [], rank: -1, cls: null }; groups.push(g); }
-      g.fires.push({ name: f[1], acres: f[2], cls: f[3], cause: f[4], fdra: f[5] });
+      g.fires.push({ name: f[1], acres: f[2], cls: f[3], cause: f[4], fdra: f[5],
+                     nwcgGeneral: f[6], nwcgClass: f[7], nwcgSpecific: f[8], source: f[9] });
       g.values.push(value);
       var rank = fireClassRank(f[3]);
       if (rank > g.rank) { g.rank = rank; g.cls = f[3]; }
@@ -497,14 +499,26 @@
     for (var i = 0; i < causes.length; i++) if (causes[i].code === code) return causes[i];
     return null;
   }
-  function causeText(code) {
-    if (code === null || code === undefined) return "Cause not reported";
-    var c = causeInfo(code);
-    if (!c) return "Cause code " + code;
-    var nwcg = c.nwcg_general.length === 1 ? "NWCG: " + c.nwcg_general[0] + " (" + c.nwcg_class + ")" :
-      c.nwcg_general.length ? "NWCG: one of " + c.nwcg_general.join(", ") + " (" + c.nwcg_class + ")" : "";
-    return c.label + " (FF+ " + c.code + ")" + (nwcg ? " \u00b7 " + nwcg : "");
+  // One fire's cause line. With per-fire NWCG detail (scripts/fire_occurrence.py data) the
+  // fire's OWN general/specific cause is shown; without it (older FF+-code-only data) the FF+
+  // code's crosswalk is, which for codes 2 and 9 can only say "one of".
+  function causeText(fire) {
+    var code = fire.cause, c = code === null || code === undefined ? null : causeInfo(code);
+    var ffp = c ? c.label + " (FF+ " + c.code + ")" : (code === null || code === undefined ? "" : "FF+ " + code);
+    var nwcg = "";
+    if (fire.nwcgGeneral) {
+      nwcg = "NWCG: " + fire.nwcgGeneral + (fire.nwcgClass ? " (" + fire.nwcgClass + ")" : "") +
+        (fire.nwcgSpecific ? " \u2013 " + fire.nwcgSpecific : "");
+    } else if (fire.nwcgClass) {
+      nwcg = "NWCG: " + fire.nwcgClass + ", no general cause reported" +
+        (fire.nwcgSpecific ? " \u2013 " + fire.nwcgSpecific : "");
+    } else if (c && c.nwcg_general.length) {
+      nwcg = c.nwcg_general.length === 1 ? "NWCG: " + c.nwcg_general[0] + " (" + c.nwcg_class + ")" :
+        "NWCG: one of " + c.nwcg_general.join(", ") + " (" + c.nwcg_class + ")";
+    }
+    return [ffp, nwcg].filter(function (x) { return x; }).join(" \u00b7 ") || "Cause not reported";
   }
+  var SOURCE_LABELS = { FOD: "FPA FOD", FODR: "InFORM FODR" };
   function psaText(fdraId) {
     if (!fdraId) return "PSA not recorded";
     for (var i = 0; i < manifest.fdras.length; i++) {
@@ -512,18 +526,29 @@
     }
     return "PSA: " + fdraId;
   }
-  // "all" | "human" (FF+ 2-8, the codes whose NWCG classification is unambiguously Human) |
-  // a single FF+ code.
-  function causeMatches(code) {
-    if (state.fireCause === "all") return true;
-    if (state.fireCause === "human") { var c = causeInfo(code); return !!c && c.nwcg_class === "Human"; }
-    return String(code) === state.fireCause;
+  // state.fireCause: "all" | "human" | "class:<NWCG class>" | "nwcg:<NWCG general cause>" |
+  // "ffp:<FF+ code>". "human" uses the fire's own NWCG class when the data has it, otherwise
+  // FF+ codes 2-8 (the codes whose crosswalk is unambiguously Human; 9 may be Undetermined).
+  function causeMatches(f) {
+    var sel = state.fireCause;
+    if (sel === "all") return true;
+    if (sel === "human") {
+      if (f[7]) return f[7] === "Human";
+      var c = causeInfo(f[4]); return !!c && c.nwcg_class === "Human";
+    }
+    if (sel.indexOf("class:") === 0) return f[7] === sel.slice(6);
+    if (sel.indexOf("nwcg:") === 0) return f[6] === sel.slice(5);
+    if (sel.indexOf("ffp:") === 0) return String(f[4]) === sel.slice(4);
+    return true;
   }
   function causeFilterLabel() {
-    if (state.fireCause === "all") return "all causes";
-    if (state.fireCause === "human") return "human-caused";
-    var c = causeInfo(+state.fireCause);
-    return c ? c.label.toLowerCase() : "cause " + state.fireCause;
+    var sel = state.fireCause;
+    if (sel === "all") return "all causes";
+    if (sel === "human") return "human-caused";
+    if (sel.indexOf("class:") === 0) return sel.slice(6).toLowerCase() + " (NWCG class)";
+    if (sel.indexOf("nwcg:") === 0) return sel.slice(5).toLowerCase();
+    var c = causeInfo(+sel.slice(4));
+    return c ? c.label.toLowerCase() + " (FF+ " + c.code + ")" : sel;
   }
 
   function fireCount(groups) { return groups.reduce(function (n, g) { return n + g.fires.length; }, 0); }
@@ -697,8 +722,9 @@
           var names = g.fires.slice(0, FIRE_TIP_MAX_NAMES).map(function (f) {
             return "<div class=\"fireEntry\"><div><span class=\"fireName\">" + escapeHtml(f.name) + "</span> &middot; " +
               fmtAcres(f.acres) + (f.cls ? " (Class " + escapeHtml(f.cls) + ")" : "") + "</div>" +
-              "<div class=\"fireDetail\">" + escapeHtml(causeText(f.cause)) + "</div>" +
-              "<div class=\"fireDetail\">" + escapeHtml(psaText(f.fdra)) + "</div></div>";
+              "<div class=\"fireDetail\">" + escapeHtml(causeText(f)) + "</div>" +
+              "<div class=\"fireDetail\">" + escapeHtml(psaText(f.fdra) +
+                (f.source ? " \u00b7 Source: " + (SOURCE_LABELS[f.source] || f.source) : "")) + "</div></div>";
           });
           if (g.fires.length > FIRE_TIP_MAX_NAMES) names.push("<div>+" + (g.fires.length - FIRE_TIP_MAX_NAMES) + " more</div>");
           tip.innerHTML = "<div class=\"hoverDate\">" + isoToLabel(g.date) + " &middot; " +
@@ -852,15 +878,31 @@
     state.fireYear = "all";
     els.fireYear.value = "all";
     els.fireCause.innerHTML = "";
-    var causeOpts = [["all", "All causes"]];
-    var causes = manifest.fires.causes || [];
-    if (causes.some(function (c) { return c.nwcg_class === "Human"; })) causeOpts.push(["human", "Human-caused (FF+ 2\u20138)"]);
-    causes.forEach(function (c) { causeOpts.push([String(c.code), c.code + " \u00b7 " + c.label]); });
-    causeOpts.forEach(function (o) {
+    var causes = manifest.fires.causes || [], detail = !!manifest.fires.has_nwcg_detail;
+    function addOpt(parent, value, text) {
       var opt = document.createElement("option");
-      opt.value = o[0]; opt.textContent = o[1];
-      els.fireCause.appendChild(opt);
-    });
+      opt.value = value; opt.textContent = text;
+      parent.appendChild(opt);
+    }
+    function addGroup(label, opts) {
+      var grp = document.createElement("optgroup");
+      grp.label = label;
+      opts.forEach(function (o) { addOpt(grp, o[0], o[1]); });
+      els.fireCause.appendChild(grp);
+    }
+    addOpt(els.fireCause, "all", "All causes");
+    if (detail) {
+      addGroup("NWCG cause class", [["class:Human", "Human"], ["class:Natural", "Natural"],
+                                    ["class:Undetermined", "Undetermined"]]);
+      addGroup("NWCG general cause", (manifest.fires.nwcg_general_causes || []).map(function (n) {
+        return ["nwcg:" + n.label, n.label];
+      }));
+    } else if (causes.some(function (c) { return c.nwcg_class === "Human"; })) {
+      addOpt(els.fireCause, "human", "Human-caused (FF+ 2\u20138)");
+    }
+    addGroup("FireFamily Plus statistical cause", causes.map(function (c) {
+      return ["ffp:" + c.code, c.code + " \u00b7 " + c.label];
+    }));
     state.fireCause = "all";
     els.fireCause.value = "all";
     renderFireSources();
