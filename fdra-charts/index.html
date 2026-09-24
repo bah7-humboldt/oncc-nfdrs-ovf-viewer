@@ -273,16 +273,17 @@
             window can plot, since each dot needs an observation on its date. Station charts show
             every fire in that station's PSA. Hover a dot for the fire name(s), acreage and
             percentile.</p>
-            <p><strong>Fire cause:</strong> each fire shows its FireFamily Plus statistical cause
-            (1 Lightning through 9 Miscellaneous, the code FireFamily Plus analyses use) and its
-            NWCG cause (PMS 910). When the fire data carries each fire's own NWCG Cause
-            Classification, General Cause and, for InFORM FODR records, Specific Cause, those are
-            shown exactly. The cause filter then offers NWCG class and general-cause options. With
-            older data that has only the FF+ code, the NWCG cause is the FF+ code's crosswalk. That
-            is exact for most codes but ambiguous for two: code 2 is Equipment and Vehicle Use
-            <em>or</em> Power Generation/Transmission/Distribution, and code 9 is Undetermined,
-            Firearms and Explosives Use, Fireworks, or Other Causes. For that older data,
-            "Human-caused" means codes 2&ndash;8 only.</p>
+            <p><strong>Fire cause:</strong> a fire's popup lists its NWCG cause (PMS 910) from
+            broad to narrow: Cause Classification, General Cause, Specific Cause, Specific Cause
+            Detail. For example, "Human, Equipment and Vehicle Use, Trailer, Brakes". Levels with
+            no value (or "Unknown") are left off. FPA FOD records (1992 through the edition's last
+            year) carry only the first two levels; the specific levels come from InFORM FODR
+            records (later years). An Undetermined fire shows only its investigation status when
+            one is recorded, e.g. "Undetermined, Under investigation". The cause filter can also
+            select by FireFamily Plus statistical cause (1 Lightning through 9 Miscellaneous),
+            the code FireFamily Plus analyses use. It is less exact: code 2 covers Equipment and
+            Vehicle Use <em>and</em> Power Generation/Transmission/Distribution, and code 9 covers
+            Undetermined, Firearms and Explosives Use, Fireworks, and Other Causes.</p>
           </div>
         </details>
       </div>
@@ -478,7 +479,7 @@
       var g = byDate[f[0]];
       if (!g) { g = byDate[f[0]] = { date: f[0], fires: [], values: [], rank: -1, cls: null }; groups.push(g); }
       g.fires.push({ name: f[1], acres: f[2], cls: f[3], cause: f[4], fdra: f[5],
-                     nwcgGeneral: f[6], nwcgClass: f[7], nwcgSpecific: f[8], source: f[9] });
+                     nwcgGeneral: f[6], nwcgClass: f[7], nwcgSpecific: f[8], nwcgDetail: f[10] });
       g.values.push(value);
       var rank = fireClassRank(f[3]);
       if (rank > g.rank) { g.rank = rank; g.cls = f[3]; }
@@ -499,26 +500,34 @@
     for (var i = 0; i < causes.length; i++) if (causes[i].code === code) return causes[i];
     return null;
   }
-  // One fire's cause line. With per-fire NWCG detail (scripts/fire_occurrence.py data) the
-  // fire's OWN general/specific cause is shown; without it (older FF+-code-only data) the FF+
-  // code's crosswalk is, which for codes 2 and 9 can only say "one of".
+  // One fire's cause line: NWCG Cause Classification, General Cause, Specific Cause, Specific
+  // Cause Detail, comma-joined, skipping blanks (and "Unknown", which adds nothing). An
+  // Undetermined fire shows only its investigation status, when one is recorded -- per NWCG
+  // PMS 910 that's the only kind of specific cause Undetermined allows (Under Investigation,
+  // Not Investigated, Origin and/or Cause Not Identified, Origin Destroyed). Data without
+  // per-fire NWCG fields (older FF+-code-only CSV) falls back to the FF+ code's crosswalk,
+  // which can only name a general cause when the code maps to exactly one.
   function causeText(fire) {
-    var code = fire.cause, c = code === null || code === undefined ? null : causeInfo(code);
-    var ffp = c ? c.label + " (FF+ " + c.code + ")" : (code === null || code === undefined ? "" : "FF+ " + code);
-    var nwcg = "";
-    if (fire.nwcgGeneral) {
-      nwcg = "NWCG: " + fire.nwcgGeneral + (fire.nwcgClass ? " (" + fire.nwcgClass + ")" : "") +
-        (fire.nwcgSpecific ? " \u2013 " + fire.nwcgSpecific : "");
-    } else if (fire.nwcgClass) {
-      nwcg = "NWCG: " + fire.nwcgClass + ", no general cause reported" +
-        (fire.nwcgSpecific ? " \u2013 " + fire.nwcgSpecific : "");
-    } else if (c && c.nwcg_general.length) {
-      nwcg = c.nwcg_general.length === 1 ? "NWCG: " + c.nwcg_general[0] + " (" + c.nwcg_class + ")" :
-        "NWCG: one of " + c.nwcg_general.join(", ") + " (" + c.nwcg_class + ")";
+    function keep(v) { return v && !/^unknown$/i.test(v); }
+    var parts;
+    if (fire.nwcgClass || fire.nwcgGeneral) {
+      if (fire.nwcgClass === "Undetermined") {
+        parts = ["Undetermined", fire.nwcgSpecific];
+      } else {
+        parts = [fire.nwcgClass, fire.nwcgGeneral, fire.nwcgSpecific, fire.nwcgDetail];
+      }
+    } else {
+      var c = fire.cause === null || fire.cause === undefined ? null : causeInfo(fire.cause);
+      if (!c) return "Cause not reported";
+      var cls = c.nwcg_class === "Human or Undetermined" ? null : c.nwcg_class;
+      parts = [cls, c.nwcg_general.length === 1 ? c.nwcg_general[0] : null];
+      if (!parts[0] && !parts[1]) parts = [c.label];
     }
-    return [ffp, nwcg].filter(function (x) { return x; }).join(" \u00b7 ") || "Cause not reported";
+    // Drop blanks/"Unknown", and a level that just repeats the one above it (NWCG's general
+    // cause for a Natural-class fire is also "Natural").
+    parts = parts.filter(function (p, i) { return keep(p) && p !== parts[i - 1]; });
+    return parts.length ? parts.join(", ") : "Cause not reported";
   }
-  var SOURCE_LABELS = { FOD: "FPA FOD", FODR: "InFORM FODR" };
   function psaText(fdraId) {
     if (!fdraId) return "PSA not recorded";
     for (var i = 0; i < manifest.fdras.length; i++) {
@@ -723,8 +732,7 @@
             return "<div class=\"fireEntry\"><div><span class=\"fireName\">" + escapeHtml(f.name) + "</span> &middot; " +
               fmtAcres(f.acres) + (f.cls ? " (Class " + escapeHtml(f.cls) + ")" : "") + "</div>" +
               "<div class=\"fireDetail\">" + escapeHtml(causeText(f)) + "</div>" +
-              "<div class=\"fireDetail\">" + escapeHtml(psaText(f.fdra) +
-                (f.source ? " \u00b7 Source: " + (SOURCE_LABELS[f.source] || f.source) : "")) + "</div></div>";
+              "<div class=\"fireDetail\">" + escapeHtml(psaText(f.fdra)) + "</div></div>";
           });
           if (g.fires.length > FIRE_TIP_MAX_NAMES) names.push("<div>+" + (g.fires.length - FIRE_TIP_MAX_NAMES) + " more</div>");
           tip.innerHTML = "<div class=\"hoverDate\">" + isoToLabel(g.date) + " &middot; " +
@@ -837,7 +845,9 @@
     els.fireSources.hidden = !srcs.length;
     if (!srcs.length) return;
     var html = "<strong>Fire occurrence data:</strong> " + manifest.fires.count.toLocaleString() +
-      " plotted " + escapeHtml(gacc) + " fires (Class " + escapeHtml(manifest.fires.min_size_class) + "+). Sources:";
+      " plotted " + escapeHtml(gacc) + " fires (Class " + escapeHtml(manifest.fires.min_size_class) + "+). " +
+      "Fire popups list cause as NWCG Cause Classification, General Cause, Specific Cause, Specific Cause " +
+      "Detail, with blank levels left off; Undetermined fires show only their investigation status. Sources:";
     html += "<ul class=\"citeList\">" + srcs.map(function (s) {
       // A citation that already contains its own URL (FPA FOD's verbatim DOI citation) gets
       // that URL linked in place instead of repeated after it.
