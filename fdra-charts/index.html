@@ -254,6 +254,14 @@
             <p><strong>Historical average/extreme:</strong> the gray line is the mean value for
             that calendar day across every year in the historical window; the red line is that
             same day's most extreme (driest, or highest danger) value ever recorded.</p>
+            <p><strong>Severe Fire Danger Index (SFDI):</strong> Jolly et al. 2019 (Fire 2(3):47). Each
+            day's ERC and BI are converted to percentiles of this station's (or PSA's/GACC's) own
+            history and multiplied (p = ERC&prime; &times; BI&prime;). SFDI is that product's
+            percentile within the same history, so it runs 0&ndash;100 and rises only when ERC
+            and BI are high <em>together</em>. The classes are the paper's: Low &le;60, Moderate
+            60&ndash;80, High 80&ndash;90, Very High 90&ndash;97, Severe &gt;97. They match this
+            toolkit's PSA danger maps. A PSA's SFDI comes from its averaged ERC and BI, not from
+            averaging its stations' SFDI.</p>
             <p><strong>Period of record:</strong> the dates printed above each chart are the
             first and last day that station (or PSA/GACC rollup) actually has data. Many RAWS
             were installed after the climatology window's start, so their average, extreme,
@@ -708,6 +716,9 @@
 
     function tipRow(label, value) {
       if (value === null || value === undefined) return null;
+      // Class-labelled bands (SFDI: the value already IS a percentile) show the class name.
+      var cls = bandLabelFor(series.bands, value);
+      if (cls) return label + ": " + state.index + " " + fmt(value) + " (" + cls + ")";
       var pct = percentileForValue(series.percentile_points, value);
       var pctStr = pct === null ? "" : " (" + fmtPct(pct) + "th percentile)";
       return label + ": " + state.index + " " + fmt(value) + pctStr;
@@ -777,12 +788,27 @@
     return true;
   }
 
+  // Class name of the labelled band holding `value`, or null for plain percentile bands. SFDI's
+  // classes (Jolly et al. 2019 Eq. 3) are upper-inclusive: 60 < SFDI <= 80 is Moderate, so a
+  // value exactly on a floor belongs to the band below -- same rule as the danger maps'
+  // fdra_color_scheme.sfdi_band_index().
+  function bandLabelFor(bands, value) {
+    if (!bands.length || !bands[0].label) return null;
+    for (var i = 0; i < bands.length; i++) {
+      var b = bands[i];
+      if ((b.floor === null || value > b.floor) && (b.ceil === null || value <= b.ceil)) return b.label;
+    }
+    return null;
+  }
+
   function renderBandsLegend(index, bands) {
-    els.bandsTitle.textContent = "Percentile bands — " + (manifest.index_labels[index] || index);
+    var classed = bands.length && bands[0].label;
+    els.bandsTitle.textContent = (classed ? "Classes — " : "Percentile bands — ") + (manifest.index_labels[index] || index);
     els.bandsLegend.innerHTML = "";
     bands.forEach(function (b) {
-      var label = (b.floor === null ? "<" + fmt(b.ceil) : b.ceil === null ? fmt(b.floor) + "+" :
+      var label = (b.floor === null ? (classed ? "\u2264" : "<") + fmt(b.ceil) : b.ceil === null ? (classed ? ">" : "") + fmt(b.floor) + (classed ? "" : "+") :
         fmt(b.floor) + "–" + fmt(b.ceil));
+      if (b.label) label = b.label + " (" + label + ")";
       var item = document.createElement("span");
       item.className = "legendItem";
       var swatch = document.createElement("span");
