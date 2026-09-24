@@ -118,6 +118,8 @@
   .sourceLine { font-size: 11.5px; line-height: 1.6; color: var(--text-dim); margin: 0 0 8px; }
   .sourceLine a { color: var(--accent); }
   .sourceLine strong { color: var(--text); }
+  .citeList { margin: 4px 0 0; padding-left: 18px; }
+  .citeList li { margin-bottom: 3px; overflow-wrap: anywhere; }
   details.howTo { background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 10px 12px; }
   details.howTo summary { font-size: 12.5px; font-weight: 700; cursor: pointer; color: var(--text); list-style: revert; }
   details.howTo summary:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
@@ -150,6 +152,9 @@
   select.narrow { min-width: 110px; }
   .fireRow { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
   .hoverTip .fireName { font-weight: 650; }
+  .hoverTip.fireTip { white-space: normal; width: max-content; max-width: 380px; }
+  .hoverTip .fireEntry { margin-bottom: 3px; }
+  .hoverTip .fireDetail { color: var(--text-dim); font-size: 10.5px; }
 
   @media (max-width: 760px) {
     select { min-width: 0; width: 100%; }
@@ -189,6 +194,7 @@
             <label class="checkRow"><input type="checkbox" id="fireShow" checked>Show</label>
             <select id="fireMinClass" class="narrow" aria-label="Minimum fire size class"></select>
             <select id="fireYear" class="narrow" aria-label="Fire year"></select>
+            <select id="fireCause" class="narrow" aria-label="Fire cause"></select>
           </div>
         </div>
       </div>
@@ -234,6 +240,7 @@
           official FEMS or NWS product. Chart style based on
           <a href="https://github.com/mpanunto/NFDRS_FEMS" target="_blank" rel="noopener">mpanunto/NFDRS_FEMS</a>.
         </p>
+        <div class="sourceLine" id="fireSources" hidden></div>
         <details class="howTo">
           <summary>How to interpret these charts</summary>
           <div class="howToBody">
@@ -266,6 +273,15 @@
             window can plot, since each dot needs an observation on its date. Station charts show
             every fire in that station's PSA. Hover a dot for the fire name(s), acreage and
             percentile.</p>
+            <p><strong>Fire cause:</strong> the fire records carry FireFamily Plus's 9-code
+            statistical cause (1 Lightning through 9 Miscellaneous). Each is shown with its
+            current NWCG General Cause and Cause Classification (NWCG PMS 910), using the
+            crosswalk the FDRA_FODR_FOD tool applied when it built these records. Most codes match
+            one NWCG general cause. Two combine several: code 2 is Equipment and Vehicle Use
+            <em>or</em> Power Generation/Transmission/Distribution, and code 9 (Miscellaneous) is
+            Undetermined, Firearms and Explosives Use, Fireworks, or Other Causes. For those the
+            single NWCG cause can't be recovered from this data. "Human-caused" in the cause
+            filter means codes 2&ndash;8 only, since a code 9 fire may be Undetermined.</p>
           </div>
         </details>
       </div>
@@ -305,6 +321,8 @@
     fireShow: document.getElementById("fireShow"),
     fireMinClass: document.getElementById("fireMinClass"),
     fireYear: document.getElementById("fireYear"),
+    fireCause: document.getElementById("fireCause"),
+    fireSources: document.getElementById("fireSources"),
     fireLegendGroup: document.getElementById("fireLegendGroup"),
     fireLegend: document.getElementById("fireLegend"),
     overlayYear: document.getElementById("overlayYear"),
@@ -316,7 +334,7 @@
   var manifest = null, gacc = null;
   var chunkCache = {}; // chunkKey ("_gacc" or an fdra id) -> parsed chunk
   var state = { fdraId: GACC_KEY, entityKey: null, index: null,
-                fireShow: true, fireMinClass: null, fireYear: "all", overlayYear: null };
+                fireShow: true, fireMinClass: null, fireYear: "all", fireCause: "all", overlayYear: null };
   var yearCache = {}; // "<year>/<chunkKey>" -> promise of that past year's chunk
 
   // Dot radius (SVG viewBox units) per fire size class -- same A-smallest..G-largest ordering
@@ -455,9 +473,10 @@
       if (value === null || value === undefined) return;
       if (state.fireYear !== "all" && f[0].slice(0, 4) !== state.fireYear) return;
       if (minRank > 0 && fireClassRank(f[3]) < minRank) return;
+      if (!causeMatches(f[4])) return;
       var g = byDate[f[0]];
       if (!g) { g = byDate[f[0]] = { date: f[0], fires: [], values: [], rank: -1, cls: null }; groups.push(g); }
-      g.fires.push({ name: f[1], acres: f[2], cls: f[3] });
+      g.fires.push({ name: f[1], acres: f[2], cls: f[3], cause: f[4], fdra: f[5] });
       g.values.push(value);
       var rank = fireClassRank(f[3]);
       if (rank > g.rank) { g.rank = rank; g.cls = f[3]; }
@@ -471,6 +490,42 @@
     groups.sort(function (a, b) { return b.radius - a.radius; });
     return groups;
   }
+  // FF+ statistical cause code -> manifest.fires.causes entry (label, NWCG general cause(s),
+  // NWCG cause classification). See scripts/fdra_charts_web_export.py load_fire_causes().
+  function causeInfo(code) {
+    var causes = (manifest.fires && manifest.fires.causes) || [];
+    for (var i = 0; i < causes.length; i++) if (causes[i].code === code) return causes[i];
+    return null;
+  }
+  function causeText(code) {
+    if (code === null || code === undefined) return "Cause not reported";
+    var c = causeInfo(code);
+    if (!c) return "Cause code " + code;
+    var nwcg = c.nwcg_general.length === 1 ? "NWCG: " + c.nwcg_general[0] + " (" + c.nwcg_class + ")" :
+      c.nwcg_general.length ? "NWCG: one of " + c.nwcg_general.join(", ") + " (" + c.nwcg_class + ")" : "";
+    return c.label + " (FF+ " + c.code + ")" + (nwcg ? " \u00b7 " + nwcg : "");
+  }
+  function psaText(fdraId) {
+    if (!fdraId) return "PSA not recorded";
+    for (var i = 0; i < manifest.fdras.length; i++) {
+      if (manifest.fdras[i].id === fdraId) return "PSA: " + manifest.fdras[i].name + " (" + fdraId + ")";
+    }
+    return "PSA: " + fdraId;
+  }
+  // "all" | "human" (FF+ 2-8, the codes whose NWCG classification is unambiguously Human) |
+  // a single FF+ code.
+  function causeMatches(code) {
+    if (state.fireCause === "all") return true;
+    if (state.fireCause === "human") { var c = causeInfo(code); return !!c && c.nwcg_class === "Human"; }
+    return String(code) === state.fireCause;
+  }
+  function causeFilterLabel() {
+    if (state.fireCause === "all") return "all causes";
+    if (state.fireCause === "human") return "human-caused";
+    var c = causeInfo(+state.fireCause);
+    return c ? c.label.toLowerCase() : "cause " + state.fireCause;
+  }
+
   function fireCount(groups) { return groups.reduce(function (n, g) { return n + g.fires.length; }, 0); }
 
   // entity.record ({start, end, days}, the chart's ACTUAL historical period of record from its
@@ -640,18 +695,21 @@
         dot.addEventListener("mouseenter", function (evt) {
           hoverLine.setAttribute("visibility", "hidden");
           var names = g.fires.slice(0, FIRE_TIP_MAX_NAMES).map(function (f) {
-            return "<div><span class=\"fireName\">" + escapeHtml(f.name) + "</span> &middot; " + fmtAcres(f.acres) +
-              (f.cls ? " (Class " + escapeHtml(f.cls) + ")" : "") + "</div>";
+            return "<div class=\"fireEntry\"><div><span class=\"fireName\">" + escapeHtml(f.name) + "</span> &middot; " +
+              fmtAcres(f.acres) + (f.cls ? " (Class " + escapeHtml(f.cls) + ")" : "") + "</div>" +
+              "<div class=\"fireDetail\">" + escapeHtml(causeText(f.cause)) + "</div>" +
+              "<div class=\"fireDetail\">" + escapeHtml(psaText(f.fdra)) + "</div></div>";
           });
           if (g.fires.length > FIRE_TIP_MAX_NAMES) names.push("<div>+" + (g.fires.length - FIRE_TIP_MAX_NAMES) + " more</div>");
           tip.innerHTML = "<div class=\"hoverDate\">" + isoToLabel(g.date) + " &middot; " +
             (g.fires.length === 1 ? "1 fire" : g.fires.length + " fires") + "</div>" + names.join("") +
             "<div>" + tipRow(g.fires.length > 1 ? "Discovery day (avg)" : "Discovery day", g.value) + "</div>";
+          tip.classList.add("fireTip");
           tip.hidden = false;
           placeTip(evt);
         });
         dot.addEventListener("mousemove", placeTip);
-        dot.addEventListener("mouseleave", function () { tip.hidden = true; });
+        dot.addEventListener("mouseleave", function () { tip.hidden = true; tip.classList.remove("fireTip"); });
         fireLayer.appendChild(dot);
       });
     }
@@ -748,6 +806,23 @@
     els.fcastLegendItem.hidden = past;
   }
 
+  function renderFireSources() {
+    var srcs = (manifest.fires && manifest.fires.sources) || [];
+    els.fireSources.hidden = !srcs.length;
+    if (!srcs.length) return;
+    var html = "<strong>Fire occurrence data:</strong> " + manifest.fires.count.toLocaleString() +
+      " plotted " + escapeHtml(gacc) + " fires (Class " + escapeHtml(manifest.fires.min_size_class) + "+). Sources:";
+    html += "<ul class=\"citeList\">" + srcs.map(function (s) {
+      // A citation that already contains its own URL (FPA FOD's verbatim DOI citation) gets
+      // that URL linked in place instead of repeated after it.
+      var link = "<a href=\"" + escapeHtml(s.url) + "\" target=\"_blank\" rel=\"noopener\">" + escapeHtml(s.url) + "</a>";
+      var cite = escapeHtml(s.citation);
+      var body = cite.indexOf(escapeHtml(s.url)) !== -1 ? cite.replace(escapeHtml(s.url), link) : cite + " " + link;
+      return "<li><strong>" + escapeHtml(s.label) + ":</strong> " + body + "</li>";
+    }).join("") + "</ul>";
+    els.fireSources.innerHTML = html;
+  }
+
   function populateFireControls() {
     var on = !!(manifest.fires && manifest.fires.size_classes && manifest.fires.size_classes.length);
     els.fireField.hidden = !on;
@@ -776,6 +851,19 @@
     });
     state.fireYear = "all";
     els.fireYear.value = "all";
+    els.fireCause.innerHTML = "";
+    var causeOpts = [["all", "All causes"]];
+    var causes = manifest.fires.causes || [];
+    if (causes.some(function (c) { return c.nwcg_class === "Human"; })) causeOpts.push(["human", "Human-caused (FF+ 2\u20138)"]);
+    causes.forEach(function (c) { causeOpts.push([String(c.code), c.code + " \u00b7 " + c.label]); });
+    causeOpts.forEach(function (o) {
+      var opt = document.createElement("option");
+      opt.value = o[0]; opt.textContent = o[1];
+      els.fireCause.appendChild(opt);
+    });
+    state.fireCause = "all";
+    els.fireCause.value = "all";
+    renderFireSources();
     els.fireShow.checked = state.fireShow;
   }
 
@@ -903,7 +991,7 @@
         manifest.current_year_range.latest_observed + " observed (" + obsCount + " day(s) with data), " +
         "forecast through " + manifest.current_year_range.forecast_through + ".") +
         (fireGroups ? " " + fireCount(fireGroups).toLocaleString() + " fire(s) shown (Class " + state.fireMinClass +
-          "+, " + (state.fireYear === "all" ? "all years" : state.fireYear) + ")." : "");
+          "+, " + (state.fireYear === "all" ? "all years" : state.fireYear) + ", " + causeFilterLabel() + ")." : "");
     }).catch(function (err) {
       els.statusBar.textContent = "Could not load " + (pastYear ? pastYear + "/" : "") + chunkKey + ".json: " + err.message;
     });
@@ -921,12 +1009,13 @@
     });
     els.fireShow.addEventListener("change", function () {
       state.fireShow = els.fireShow.checked;
-      els.fireMinClass.disabled = els.fireYear.disabled = !state.fireShow;
+      els.fireMinClass.disabled = els.fireYear.disabled = els.fireCause.disabled = !state.fireShow;
       render();
     });
     els.overlayYear.addEventListener("change", function () { state.overlayYear = els.overlayYear.value; render(); });
     els.fireMinClass.addEventListener("change", function () { state.fireMinClass = els.fireMinClass.value; render(); });
     els.fireYear.addEventListener("change", function () { state.fireYear = els.fireYear.value; render(); });
+    els.fireCause.addEventListener("change", function () { state.fireCause = els.fireCause.value; render(); });
   }
 
   function loadGacc(g) {
