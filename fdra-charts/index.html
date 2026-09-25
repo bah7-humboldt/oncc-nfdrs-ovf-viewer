@@ -119,6 +119,7 @@
   .sourceLine a { color: var(--accent); }
   .sourceLine strong { color: var(--text); }
   .citeList { margin: 4px 0 0; padding-left: 18px; }
+  #fireSources { margin-bottom: 8px; }
   .citeList li { margin-bottom: 3px; overflow-wrap: anywhere; }
   details.howTo { background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 10px 12px; }
   details.howTo summary { font-size: 12.5px; font-weight: 700; cursor: pointer; color: var(--text); list-style: revert; }
@@ -127,6 +128,7 @@
   .howToBody p { margin: 0 0 10px; }
   .howToBody p:last-child { margin-bottom: 0; }
   .howToBody strong { color: var(--text); }
+  .howToBody a { color: var(--accent); }
 
   svg text { fill: var(--text-dim); font-family: inherit; }
   .axisLine { stroke: var(--border); stroke-width: 1; }
@@ -240,7 +242,10 @@
           official FEMS or NWS product. Chart style based on
           <a href="https://github.com/mpanunto/NFDRS_FEMS" target="_blank" rel="noopener">mpanunto/NFDRS_FEMS</a>.
         </p>
-        <div class="sourceLine" id="fireSources" hidden></div>
+        <details class="howTo" id="fireSources" hidden>
+          <summary>Fire occurrence data sources</summary>
+          <div class="howToBody" id="fireSourcesBody"></div>
+        </details>
         <details class="howTo">
           <summary>How to interpret these charts</summary>
           <div class="howToBody">
@@ -333,6 +338,7 @@
     fireYear: document.getElementById("fireYear"),
     fireCause: document.getElementById("fireCause"),
     fireSources: document.getElementById("fireSources"),
+    fireSourcesBody: document.getElementById("fireSourcesBody"),
     fireLegendGroup: document.getElementById("fireLegendGroup"),
     fireLegend: document.getElementById("fireLegend"),
     overlayYear: document.getElementById("overlayYear"),
@@ -870,19 +876,21 @@
     var srcs = (manifest.fires && manifest.fires.sources) || [];
     els.fireSources.hidden = !srcs.length;
     if (!srcs.length) return;
-    var html = "<strong>Fire occurrence data:</strong> " + manifest.fires.count.toLocaleString() +
-      " plotted " + escapeHtml(gacc) + " fires (Class " + escapeHtml(manifest.fires.min_size_class) + "+). " +
-      "Fire popups list cause as NWCG Cause Classification, General Cause, Specific Cause, Specific Cause " +
-      "Detail, with blank levels left off; Undetermined fires show only their investigation status. Sources:";
+    var html = "<p>" + manifest.fires.count.toLocaleString() + " plotted " + escapeHtml(gacc) +
+      " fires (Class " + escapeHtml(manifest.fires.min_size_class) + "+). Fire popups list cause as NWCG " +
+      "Cause Classification, General Cause, Specific Cause, Specific Cause Detail, with blank levels left " +
+      "off; Undetermined fires show only their investigation status.</p>";
     html += "<ul class=\"citeList\">" + srcs.map(function (s) {
       // A citation that already contains its own URL (FPA FOD's verbatim DOI citation) gets
       // that URL linked in place instead of repeated after it.
-      var link = "<a href=\"" + escapeHtml(s.url) + "\" target=\"_blank\" rel=\"noopener\">" + escapeHtml(s.url) + "</a>";
-      var cite = escapeHtml(s.citation);
-      var body = cite.indexOf(escapeHtml(s.url)) !== -1 ? cite.replace(escapeHtml(s.url), link) : cite + " " + link;
+      var cite = escapeHtml(s.citation), body = cite;
+      if (s.url) {
+        var link = "<a href=\"" + escapeHtml(s.url) + "\" target=\"_blank\" rel=\"noopener\">" + escapeHtml(s.url) + "</a>";
+        body = cite.indexOf(escapeHtml(s.url)) !== -1 ? cite.replace(escapeHtml(s.url), link) : cite + " " + link;
+      }
       return "<li><strong>" + escapeHtml(s.label) + ":</strong> " + body + "</li>";
     }).join("") + "</ul>";
-    els.fireSources.innerHTML = html;
+    els.fireSourcesBody.innerHTML = html;
   }
 
   function populateFireControls() {
