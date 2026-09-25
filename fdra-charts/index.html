@@ -149,6 +149,11 @@
   .fireDot { fill: var(--text); fill-opacity: 0.32; stroke: var(--text); stroke-opacity: 0.6; stroke-width: 0.7; cursor: pointer; }
   .fireDot:hover { fill: #e8590c; fill-opacity: 0.9; stroke: #e8590c; }
   .legendSwatchDot { display: inline-block; border-radius: 50%; background: var(--text); opacity: 0.55; }
+  /* IMSR large-growth days: same translucent ink as the fire dots (analyst request), told
+     apart by shape. */
+  .growthMark { fill: var(--text); fill-opacity: 0.32; stroke: var(--text); stroke-opacity: 0.6; stroke-width: 0.7; cursor: pointer; }
+  .growthMark:hover { fill: #e8590c; fill-opacity: 0.9; stroke: #e8590c; }
+  .legendSwatchTri { display: inline-block; width: 0; height: 0; border-style: solid; border-color: transparent transparent var(--text) transparent; opacity: 0.55; }
   .checkRow { display: flex; align-items: center; gap: 6px; font-size: 12.5px; min-height: 29px; cursor: pointer; }
   .checkRow input { margin: 0; accent-color: var(--accent); }
   select.narrow { min-width: 110px; }
@@ -199,6 +204,14 @@
             <select id="fireCause" class="narrow" aria-label="Fire cause"></select>
           </div>
         </div>
+        <div class="field" id="growthField" hidden>
+          <span class="fieldLabel">Large growth days (IMSR)</span>
+          <div class="fireRow">
+            <label class="checkRow"><input type="checkbox" id="growthShow" checked>Show</label>
+            <select id="growthMin" class="narrow" aria-label="Minimum daily growth"></select>
+            <select id="growthYear" class="narrow" aria-label="Growth year"></select>
+          </div>
+        </div>
       </div>
 
       <div class="panel">
@@ -224,6 +237,10 @@
           <div class="legendGroup" id="fireLegendGroup" hidden>
             <span class="legendGroupTitle">Fire size class</span>
             <div class="legendItems" id="fireLegend"></div>
+          </div>
+          <div class="legendGroup" id="growthLegendGroup" hidden>
+            <span class="legendGroupTitle">Daily growth (IMSR)</span>
+            <div class="legendItems" id="growthLegend"></div>
           </div>
         </div>
       </div>
@@ -286,6 +303,24 @@
             window can plot, since each dot needs an observation on its date. Station charts show
             every fire in that station's PSA. Hover a dot for the fire name(s), acreage and
             percentile.</p>
+            <p><strong>Large growth days (IMSR):</strong> each triangle is a day this PSA's
+            large fires (or, on the GACC chart, all of its California large fires) grew at least
+            the selected acreage in total, placed at the index value observed that day, so the
+            triangles show where on the percentile bands big spread days actually fell. Triangle
+            size is that day's growth. Growth comes from the national Incident Management
+            Situation Reports (NICC), extracted with IMSR-TOOL: the change in each fire's reported
+            size between consecutive daily reports, put on the day <em>before</em> the report
+            date because a report's acreage is as of that morning. A fire's first IMSR entry
+            usually shows no change; its whole reported size is then assumed to have burned in
+            the previous shift, unless the fire had been burning more than 3 days before it was
+            first listed (then that growth is left out). A first entry that does show a change
+            counts just that change. A fire re-listed under a new unit continues from its last
+            size, and a zone split off an existing fire (e.g. August Complex West Zone) adds no
+            growth on its first entry. Only fires large enough to be listed in the IMSR count. Growth across a missed report (e.g. a weekend) can't be put
+            on one day and is left out. A fire that can't be matched to a located fire record (mostly
+            complexes) counts in the PSA where most of its home unit's fires are. The
+            status line below the chart gives the share of the shown days at or above the 90th
+            percentile (at or below the 10th for fuel moisture).</p>
             <p><strong>Fire cause:</strong> a fire's popup lists its NWCG cause (PMS 910) from
             broad to narrow: Cause Classification, General Cause, Specific Cause, Specific Cause
             Detail. For example, "Human, Equipment and Vehicle Use, Trailer, Brakes". Levels with
@@ -341,6 +376,12 @@
     fireSourcesBody: document.getElementById("fireSourcesBody"),
     fireLegendGroup: document.getElementById("fireLegendGroup"),
     fireLegend: document.getElementById("fireLegend"),
+    growthField: document.getElementById("growthField"),
+    growthShow: document.getElementById("growthShow"),
+    growthMin: document.getElementById("growthMin"),
+    growthYear: document.getElementById("growthYear"),
+    growthLegendGroup: document.getElementById("growthLegendGroup"),
+    growthLegend: document.getElementById("growthLegend"),
     overlayYear: document.getElementById("overlayYear"),
     obsSwatch: document.getElementById("obsSwatch"),
     obsLegendText: document.getElementById("obsLegendText"),
@@ -350,7 +391,8 @@
   var manifest = null, gacc = null;
   var chunkCache = {}; // chunkKey ("_gacc" or an fdra id) -> parsed chunk
   var state = { fdraId: GACC_KEY, entityKey: null, index: null,
-                fireShow: true, fireMinClass: null, fireYear: "all", fireCause: "all", overlayYear: null };
+                fireShow: true, fireMinClass: null, fireYear: "all", fireCause: "all", overlayYear: null,
+                growthShow: true, growthMin: null, growthYear: "all" };
   var yearCache = {}; // "<year>/<chunkKey>" -> promise of that past year's chunk
 
   // Dot radius (SVG viewBox units) per fire size class -- same A-smallest..G-largest ordering
@@ -358,6 +400,11 @@
   var FIRE_CLASS_RADIUS = { A: 1.5, B: 2, C: 2.8, D: 3.8, E: 5, F: 6.5, G: 8.5 };
   var FIRE_DEFAULT_RADIUS = 2.4;
   var FIRE_TIP_MAX_NAMES = 10;
+  // Growth triangle half-width: 3 at 1,000 ac/day, +2.5 per tenfold, capped.
+  function growthRadius(acres) { return Math.min(9.5, 3 + 2.5 * Math.log(Math.max(acres, 1000) / 1000) / Math.LN10); }
+  function trianglePoints(x, y, r) {
+    return x + "," + (y - r * 1.15) + " " + (x - r) + "," + (y + r * 0.6) + " " + (x + r) + "," + (y + r * 0.6);
+  }
 
   // ---- data loading -------------------------------------------------------
   function chunkKeyFor(fdraId) { return fdraId === GACC_KEY ? "_gacc" : fdraId; }
@@ -507,6 +554,39 @@
     groups.sort(function (a, b) { return b.radius - a.radius; });
     return groups;
   }
+  // chunk.growth ([burn date, total acres, [[fire, acres], ...]] rows) + this series' parallel
+  // growth_values -> one mark per day passing the acreage/year filters. Largest first, so small
+  // triangles draw on top and stay hoverable.
+  function buildGrowthMarks(chunkGrowth, growthValues) {
+    var marks = [];
+    chunkGrowth.forEach(function (g, i) {
+      var value = growthValues[i];
+      if (value === null || value === undefined) return;
+      if (g[1] < state.growthMin) return;
+      if (state.growthYear !== "all" && g[0].slice(0, 4) !== state.growthYear) return;
+      marks.push({ date: g[0], acres: g[1], fires: g[2], value: value, doy: isoToDoy(g[0]), radius: growthRadius(g[1]) });
+    });
+    marks.sort(function (a, b) { return b.radius - a.radius; });
+    return marks;
+  }
+  function addDaysIso(iso, n) {
+    var d = new Date(iso + "T12:00:00Z");
+    d.setUTCDate(d.getUTCDate() + n);
+    return d.toISOString().slice(0, 10);
+  }
+  // "41% at or above the 90th percentile" for the shown marks (fuel moisture: at or below the
+  // 10th), via the same interpolated percentile the hover tooltip uses.
+  function growthPercentileSummary(marks, series) {
+    if (!marks.length || !series.percentile_points.length) return "";
+    var inverted = (manifest.growth.inverted_indices || []).indexOf(state.index) !== -1;
+    var n = marks.filter(function (m) {
+      var p = percentileForValue(series.percentile_points, m.value);
+      return p !== null && (inverted ? p <= 10 : p >= 90);
+    }).length;
+    return " " + Math.round(100 * n / marks.length) + "% at or " + (inverted ? "below the 10th" : "above the 90th") +
+      " percentile.";
+  }
+
   // FF+ statistical cause code -> manifest.fires.causes entry (label, NWCG general cause(s),
   // NWCG cause classification). See scripts/fdra_charts_web_export.py load_fire_causes().
   function causeInfo(code) {
@@ -585,7 +665,7 @@
     return isoToLabel(record.start) + " \u2013 " + isoToLabel(record.end) + " (" + (Math.round(yrs * 10) / 10) + " yrs)";
   }
 
-  function renderChart(container, series, fireGroups, record, pastYear) {
+  function renderChart(container, series, fireGroups, record, pastYear, growthMarks) {
     container.innerHTML = "";
     var W = 900, H = 380, padL = 42, padR = 46, padT = 18, padB = 24;
     var plotW = W - padL - padR, plotH = H - padT - padB;
@@ -765,6 +845,32 @@
       });
     }
 
+    // Growth triangles go on top of the fire dots (fewer, and the point of the overlay).
+    if (growthMarks && growthMarks.length) {
+      var lag = (manifest.growth && manifest.growth.lag_days) || 0;
+      growthMarks.forEach(function (m) {
+        var tri = svgEl("polygon", { points: trianglePoints(xPix(m.doy - 1), yPix(clip(m.value)), m.radius), class: "growthMark" });
+        tri.addEventListener("mouseenter", function (evt) {
+          hoverLine.setAttribute("visibility", "hidden");
+          var names = m.fires.slice(0, FIRE_TIP_MAX_NAMES).map(function (f) {
+            return "<div class=\"fireEntry\"><span class=\"fireName\">" + escapeHtml(f[0]) + "</span> &middot; +" +
+              fmtAcres(f[1]) + "</div>";
+          });
+          if (m.fires.length > FIRE_TIP_MAX_NAMES) names.push("<div>+" + (m.fires.length - FIRE_TIP_MAX_NAMES) + " more</div>");
+          tip.innerHTML = "<div class=\"hoverDate\">" + isoToLabel(m.date) + " &middot; +" + fmtAcres(m.acres) +
+            " growth" + (m.fires.length > 1 ? " (" + m.fires.length + " fires)" : "") + "</div>" + names.join("") +
+            "<div>" + tipRow("Burn day", m.value) + "</div>" +
+            (lag ? "<div class=\"fireDetail\">From the IMSR of " + isoToLabel(addDaysIso(m.date, lag)) + "</div>" : "");
+          tip.classList.add("fireTip");
+          tip.hidden = false;
+          placeTip(evt);
+        });
+        tri.addEventListener("mousemove", placeTip);
+        tri.addEventListener("mouseleave", function () { tip.hidden = true; tip.classList.remove("fireTip"); });
+        fireLayer.appendChild(tri);
+      });
+    }
+
     captureRect.addEventListener("mousemove", function (evt) {
       var svgRect = svg.getBoundingClientRect();
       var localX = (evt.clientX - svgRect.left) * (W / svgRect.width);
@@ -844,6 +950,50 @@
       item.appendChild(document.createTextNode(sc["class"] + " (" + fmtClassRange(sc) + ")"));
       els.fireLegend.appendChild(item);
     });
+  }
+  function renderGrowthLegend(visible) {
+    els.growthLegendGroup.hidden = !visible;
+    if (!visible) return;
+    els.growthLegend.innerHTML = "";
+    // Same values as the acres/day dropdown, from the selected one up.
+    manifest.growth.thresholds.filter(function (a) { return a >= state.growthMin; }).forEach(function (a) {
+      var r = growthRadius(a);
+      var item = document.createElement("span");
+      item.className = "legendItem";
+      var tri = document.createElement("span");
+      tri.className = "legendSwatchTri";
+      tri.style.borderWidth = "0 " + r + "px " + (1.75 * r) + "px " + r + "px";
+      item.appendChild(tri);
+      item.appendChild(document.createTextNode(a.toLocaleString() + " ac/day"));
+      els.growthLegend.appendChild(item);
+    });
+  }
+  function populateGrowthControls() {
+    var g = manifest.growth;
+    var on = !!(g && g.thresholds && g.thresholds.length);
+    els.growthField.hidden = !on;
+    if (!on) return;
+    els.growthMin.innerHTML = "";
+    g.thresholds.forEach(function (t) {
+      var opt = document.createElement("option");
+      opt.value = String(t); opt.textContent = t.toLocaleString() + "+ ac/day";
+      els.growthMin.appendChild(opt);
+    });
+    // Default to 5,000 ac/day (the threshold analysis's headline cut) when offered.
+    state.growthMin = g.thresholds.indexOf(5000) !== -1 ? 5000 : g.thresholds[0];
+    els.growthMin.value = String(state.growthMin);
+    els.growthYear.innerHTML = "";
+    var allOpt = document.createElement("option");
+    allOpt.value = "all"; allOpt.textContent = "All years";
+    els.growthYear.appendChild(allOpt);
+    g.years.slice().reverse().forEach(function (y) {
+      var opt = document.createElement("option");
+      opt.value = String(y); opt.textContent = String(y);
+      els.growthYear.appendChild(opt);
+    });
+    state.growthYear = "all";
+    els.growthYear.value = "all";
+    els.growthShow.checked = state.growthShow;
   }
   function fmtClassRange(sc) {
     if (sc.max_acres >= 1e8) return Math.round(sc.min_acres).toLocaleString() + "+ ac";
@@ -1059,8 +1209,11 @@
         (entity.record ? " \u00b7 Period of record " + recordLabel(entity.record) : "");
       var fireGroups = (manifest.fires && state.fireShow && chunk.fires && series && series.fire_values) ?
         buildFireGroups(chunk.fires, series.fire_values) : null;
-      var ok = series && renderChart(els.panelBody, series, fireGroups, entity.record, pastYear);
+      var growthMarks = (manifest.growth && state.growthShow && chunk.growth && series && series.growth_values) ?
+        buildGrowthMarks(chunk.growth, series.growth_values) : null;
+      var ok = series && renderChart(els.panelBody, series, fireGroups, entity.record, pastYear, growthMarks);
       renderFireLegend(!!(ok && fireGroups));
+      renderGrowthLegend(!!(ok && growthMarks));
       if (!ok) {
         els.panelBody.innerHTML = ""; els.panelBody.appendChild(els.panelEmpty);
         els.panelEmpty.hidden = false;
@@ -1077,7 +1230,10 @@
         manifest.current_year_range.latest_observed + " observed (" + obsCount + " day(s) with data), " +
         "forecast through " + manifest.current_year_range.forecast_through + ".") +
         (fireGroups ? " " + fireCount(fireGroups).toLocaleString() + " fire(s) shown (Class " + state.fireMinClass +
-          "+, " + (state.fireYear === "all" ? "all years" : state.fireYear) + ", " + causeFilterLabel() + ")." : "");
+          "+, " + (state.fireYear === "all" ? "all years" : state.fireYear) + ", " + causeFilterLabel() + ")." : "") +
+        (growthMarks ? " " + growthMarks.length.toLocaleString() + " large-growth day(s) shown (" +
+          state.growthMin.toLocaleString() + "+ ac, " + (state.growthYear === "all" ? "all years" : state.growthYear) +
+          ");" + (growthMarks.length ? growthPercentileSummary(growthMarks, series) : "") : "");
     }).catch(function (err) {
       els.statusBar.textContent = "Could not load " + (pastYear ? pastYear + "/" : "") + chunkKey + ".json: " + err.message;
     });
@@ -1102,6 +1258,13 @@
     els.fireMinClass.addEventListener("change", function () { state.fireMinClass = els.fireMinClass.value; render(); });
     els.fireYear.addEventListener("change", function () { state.fireYear = els.fireYear.value; render(); });
     els.fireCause.addEventListener("change", function () { state.fireCause = els.fireCause.value; render(); });
+    els.growthShow.addEventListener("change", function () {
+      state.growthShow = els.growthShow.checked;
+      els.growthMin.disabled = els.growthYear.disabled = !state.growthShow;
+      render();
+    });
+    els.growthMin.addEventListener("change", function () { state.growthMin = +els.growthMin.value; render(); });
+    els.growthYear.addEventListener("change", function () { state.growthYear = els.growthYear.value; render(); });
   }
 
   function loadGacc(g) {
@@ -1121,6 +1284,7 @@
       populateIndexPills();
       populateYearSelect();
       populateFireControls();
+      populateGrowthControls();
       wireControls();
       els.loadState.hidden = true;
       els.consoleEl.hidden = false;
