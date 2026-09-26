@@ -198,7 +198,7 @@
         <div class="field" id="fireField" hidden>
           <span class="fieldLabel">Historical fires</span>
           <div class="fireRow">
-            <label class="checkRow"><input type="checkbox" id="fireShow" checked>Show</label>
+            <label class="checkRow"><input type="checkbox" id="fireShow">Show</label>
             <select id="fireMinClass" class="narrow" aria-label="Minimum fire size class"></select>
             <select id="fireYear" class="narrow" aria-label="Fire year"></select>
             <select id="fireCause" class="narrow" aria-label="Fire cause"></select>
@@ -207,7 +207,7 @@
         <div class="field" id="growthField" hidden>
           <span class="fieldLabel">Large growth days (IMSR)</span>
           <div class="fireRow">
-            <label class="checkRow"><input type="checkbox" id="growthShow" checked>Show</label>
+            <label class="checkRow"><input type="checkbox" id="growthShow">Show</label>
             <select id="growthMin" class="narrow" aria-label="Minimum daily growth"></select>
             <select id="growthYear" class="narrow" aria-label="Growth year"></select>
           </div>
@@ -391,8 +391,8 @@
   var manifest = null, gacc = null;
   var chunkCache = {}; // chunkKey ("_gacc" or an fdra id) -> parsed chunk
   var state = { fdraId: GACC_KEY, entityKey: null, index: null,
-                fireShow: true, fireMinClass: null, fireYear: "all", fireCause: "all", overlayYear: null,
-                growthShow: true, growthMin: null, growthYear: "all" };
+                fireShow: false, fireMinClass: null, fireYear: "all", fireCause: "all", overlayYear: null,
+                growthShow: false, growthMin: null, growthYear: "all" };
   var yearCache = {}; // "<year>/<chunkKey>" -> promise of that past year's chunk
 
   // Dot radius (SVG viewBox units) per fire size class -- same A-smallest..G-largest ordering
@@ -994,6 +994,7 @@
     state.growthYear = "all";
     els.growthYear.value = "all";
     els.growthShow.checked = state.growthShow;
+    els.growthMin.disabled = els.growthYear.disabled = !state.growthShow;
   }
   function fmtClassRange(sc) {
     if (sc.max_acres >= 1e8) return Math.round(sc.min_acres).toLocaleString() + "+ ac";
@@ -1101,6 +1102,7 @@
     els.fireCause.value = "all";
     renderFireSources();
     els.fireShow.checked = state.fireShow;
+    els.fireMinClass.disabled = els.fireYear.disabled = els.fireCause.disabled = !state.fireShow;
   }
 
   // ---- controls / render orchestration ------------------------------------
