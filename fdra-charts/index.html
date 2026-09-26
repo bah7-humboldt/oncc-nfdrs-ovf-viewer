@@ -210,6 +210,7 @@
             <label class="checkRow"><input type="checkbox" id="growthShow">Show</label>
             <select id="growthMin" class="narrow" aria-label="Minimum daily growth"></select>
             <select id="growthYear" class="narrow" aria-label="Growth year"></select>
+            <select id="growthCause" class="narrow" aria-label="Growth fire cause"></select>
           </div>
         </div>
       </div>
@@ -316,7 +317,13 @@
             first listed (then that growth is left out). A first entry that does show a change
             counts just that change. A fire re-listed under a new unit continues from its last
             size, and a zone split off an existing fire (e.g. August Complex West Zone) adds no
-            growth on its first entry. Only fires large enough to be listed in the IMSR count. Growth across a missed report (e.g. a weekend) can't be put
+            growth on its first entry. Only fires large enough to be listed in the IMSR count.
+            Each fire's cause comes from the same fire occurrence records as the fire dots
+            (FPA FOD / InFORM), matched by name and year; a complex, which those records list by
+            its individual starts, takes the cause covering at least 75% of its member fires'
+            acres. The cause filter re-totals each day from just the matching fires before the
+            acreage threshold applies. Fires with no matched record appear only under All causes
+            and Cause not matched. Growth across a missed report (e.g. a weekend) can't be put
             on one day and is left out. A fire that can't be matched to a located fire record (mostly
             complexes) counts in the PSA where most of its home unit's fires are. The
             status line below the chart gives the share of the shown days at or above the 90th
@@ -380,6 +387,7 @@
     growthShow: document.getElementById("growthShow"),
     growthMin: document.getElementById("growthMin"),
     growthYear: document.getElementById("growthYear"),
+    growthCause: document.getElementById("growthCause"),
     growthLegendGroup: document.getElementById("growthLegendGroup"),
     growthLegend: document.getElementById("growthLegend"),
     overlayYear: document.getElementById("overlayYear"),
@@ -392,7 +400,7 @@
   var chunkCache = {}; // chunkKey ("_gacc" or an fdra id) -> parsed chunk
   var state = { fdraId: GACC_KEY, entityKey: null, index: null,
                 fireShow: false, fireMinClass: null, fireYear: "all", fireCause: "all", overlayYear: null,
-                growthShow: false, growthMin: null, growthYear: "all" };
+                growthShow: false, growthMin: null, growthYear: "all", growthCause: "all" };
   var yearCache = {}; // "<year>/<chunkKey>" -> promise of that past year's chunk
 
   // Dot radius (SVG viewBox units) per fire size class -- same A-smallest..G-largest ordering
@@ -554,17 +562,36 @@
     groups.sort(function (a, b) { return b.radius - a.radius; });
     return groups;
   }
-  // chunk.growth ([burn date, total acres, [[fire, acres], ...]] rows) + this series' parallel
-  // growth_values -> one mark per day passing the acreage/year filters. Largest first, so small
-  // triangles draw on top and stay hoverable.
+  // chunk.growth ([burn date, total acres, [fire entry, ...]] rows; entry = [name, acres, psa,
+  // NWCG class, general, specific, detail, cause_method]) + this series' parallel growth_values
+  // -> one mark per day passing the filters. The cause filter works fire by fire: a day's total
+  // is re-summed from its matching fires before the acreage threshold applies, so "Natural,
+  // 5,000+" means 5,000+ acres from lightning fires alone. Largest first, so small triangles draw
+  // on top and stay hoverable.
+  function growthCauseMatches(e) {
+    var sel = state.growthCause;
+    if (sel === "all") return true;
+    if (sel === "none") return !e[3] && !e[4];
+    if (sel.indexOf("class:") === 0) return e[3] === sel.slice(6);
+    if (sel.indexOf("nwcg:") === 0) return e[4] === sel.slice(5);
+    return true;
+  }
+  function growthCauseLabel() {
+    var sel = state.growthCause;
+    if (sel === "all") return "all causes";
+    if (sel === "none") return "cause not matched";
+    return sel.slice(sel.indexOf(":") + 1).toLowerCase();
+  }
   function buildGrowthMarks(chunkGrowth, growthValues) {
     var marks = [];
     chunkGrowth.forEach(function (g, i) {
       var value = growthValues[i];
       if (value === null || value === undefined) return;
-      if (g[1] < state.growthMin) return;
       if (state.growthYear !== "all" && g[0].slice(0, 4) !== state.growthYear) return;
-      marks.push({ date: g[0], acres: g[1], fires: g[2], value: value, doy: isoToDoy(g[0]), radius: growthRadius(g[1]) });
+      var fires = g[2].filter(growthCauseMatches);
+      var acres = fires.reduce(function (n, e) { return n + e[1]; }, 0);
+      if (!fires.length || acres < state.growthMin) return;
+      marks.push({ date: g[0], acres: acres, fires: fires, value: value, doy: isoToDoy(g[0]), radius: growthRadius(acres) });
     });
     marks.sort(function (a, b) { return b.radius - a.radius; });
     return marks;
@@ -853,8 +880,13 @@
         tri.addEventListener("mouseenter", function (evt) {
           hoverLine.setAttribute("visibility", "hidden");
           var names = m.fires.slice(0, FIRE_TIP_MAX_NAMES).map(function (f) {
-            return "<div class=\"fireEntry\"><span class=\"fireName\">" + escapeHtml(f[0]) + "</span> &middot; +" +
-              fmtAcres(f[1]) + "</div>";
+            var cause = (f[3] || f[4]) ?
+              causeText({ nwcgClass: f[3], nwcgGeneral: f[4], nwcgSpecific: f[5], nwcgDetail: f[6] }) +
+                (f[7] === "complex_members" ? " (from the complex's member fires)" : "") :
+              "Cause not matched";
+            return "<div class=\"fireEntry\"><div><span class=\"fireName\">" + escapeHtml(f[0]) + "</span> &middot; +" +
+              fmtAcres(f[1]) + "</div><div class=\"fireDetail\">" + escapeHtml(cause) + "</div>" +
+              (state.fdraId === GACC_KEY ? "<div class=\"fireDetail\">" + escapeHtml(psaText(f[2])) + "</div>" : "") + "</div>";
           });
           if (m.fires.length > FIRE_TIP_MAX_NAMES) names.push("<div>+" + (m.fires.length - FIRE_TIP_MAX_NAMES) + " more</div>");
           tip.innerHTML = "<div class=\"hoverDate\">" + isoToLabel(m.date) + " &middot; +" + fmtAcres(m.acres) +
@@ -993,8 +1025,28 @@
     });
     state.growthYear = "all";
     els.growthYear.value = "all";
+    els.growthCause.innerHTML = "";
+    var causes = g.causes || { classes: [], general: [] };
+    function addOpt(parent, value, text) {
+      var opt = document.createElement("option");
+      opt.value = value; opt.textContent = text;
+      parent.appendChild(opt);
+    }
+    function addGroup(label, values, prefix) {
+      if (!values.length) return;
+      var grp = document.createElement("optgroup");
+      grp.label = label;
+      values.forEach(function (v) { addOpt(grp, prefix + v, v); });
+      els.growthCause.appendChild(grp);
+    }
+    addOpt(els.growthCause, "all", "All causes");
+    addGroup("NWCG cause class", causes.classes, "class:");
+    addGroup("NWCG general cause", causes.general, "nwcg:");
+    addOpt(els.growthCause, "none", "Cause not matched");
+    state.growthCause = "all";
+    els.growthCause.value = "all";
     els.growthShow.checked = state.growthShow;
-    els.growthMin.disabled = els.growthYear.disabled = !state.growthShow;
+    els.growthMin.disabled = els.growthYear.disabled = els.growthCause.disabled = !state.growthShow;
   }
   function fmtClassRange(sc) {
     if (sc.max_acres >= 1e8) return Math.round(sc.min_acres).toLocaleString() + "+ ac";
@@ -1235,7 +1287,7 @@
           "+, " + (state.fireYear === "all" ? "all years" : state.fireYear) + ", " + causeFilterLabel() + ")." : "") +
         (growthMarks ? " " + growthMarks.length.toLocaleString() + " large-growth day(s) shown (" +
           state.growthMin.toLocaleString() + "+ ac, " + (state.growthYear === "all" ? "all years" : state.growthYear) +
-          ");" + (growthMarks.length ? growthPercentileSummary(growthMarks, series) : "") : "");
+          ", " + growthCauseLabel() + ");" + (growthMarks.length ? growthPercentileSummary(growthMarks, series) : "") : "");
     }).catch(function (err) {
       els.statusBar.textContent = "Could not load " + (pastYear ? pastYear + "/" : "") + chunkKey + ".json: " + err.message;
     });
@@ -1262,9 +1314,10 @@
     els.fireCause.addEventListener("change", function () { state.fireCause = els.fireCause.value; render(); });
     els.growthShow.addEventListener("change", function () {
       state.growthShow = els.growthShow.checked;
-      els.growthMin.disabled = els.growthYear.disabled = !state.growthShow;
+      els.growthMin.disabled = els.growthYear.disabled = els.growthCause.disabled = !state.growthShow;
       render();
     });
+    els.growthCause.addEventListener("change", function () { state.growthCause = els.growthCause.value; render(); });
     els.growthMin.addEventListener("change", function () { state.growthMin = +els.growthMin.value; render(); });
     els.growthYear.addEventListener("change", function () { state.growthYear = els.growthYear.value; render(); });
   }
