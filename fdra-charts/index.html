@@ -59,14 +59,14 @@
   }
   .brand h1 { margin: 0; font-size: 16px; font-weight: 650; letter-spacing: -0.01em; }
   .brand .sub { font-size: 11.5px; color: var(--text-dim); margin-left: 4px; }
-  .brand .swap { margin-left: auto; font-size: 11.5px; }
-  .brand .swap a { color: var(--accent); }
 
   .controls {
     display: flex; flex-wrap: wrap; gap: 12px 16px;
     background: var(--surface); border: 1px solid var(--border); border-radius: 6px;
     padding: 12px; margin-bottom: 12px;
   }
+  .ctlMain { display: flex; flex-direction: column; gap: 10px; }
+  .ctlRow { display: flex; flex-wrap: wrap; gap: 12px 16px; }
   .field { display: flex; flex-direction: column; gap: 4px; }
   .fieldLabel {
     font-size: 9.5px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase;
@@ -157,6 +157,7 @@
   .checkRow { display: flex; align-items: center; gap: 6px; font-size: 12.5px; min-height: 29px; cursor: pointer; }
   .checkRow input { margin: 0; accent-color: var(--accent); }
   select.narrow { min-width: 110px; }
+  #fireCause, #growthCause { max-width: 200px; }
   .fireRow { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
   .hoverTip .fireName { font-weight: 650; }
   .hoverTip.fireTip { white-space: normal; width: max-content; max-width: 380px; }
@@ -165,6 +166,7 @@
 
   @media (max-width: 760px) {
     select { min-width: 0; width: 100%; }
+    #fireCause, #growthCause { max-width: none; }
   }
 </style>
 </head>
@@ -172,13 +174,16 @@
   <div class="page">
     <div class="brand"><span class="brand-mark">NFDRS</span><h1>NFDRS Fire Danger Charts</h1>
       <span class="sub" id="issuedSub"></span>
-      <span class="swap"><a href="../index.html">&larr; OVF forecast-accuracy charts</a></span>
     </div>
 
     <div id="loadState" class="loadstate">Loading&hellip;</div>
 
     <div id="console" hidden>
       <div class="controls">
+        <!-- Left column: location/year row with the fire overlays stacked under it, so the
+             Index pills' wrapped height doesn't push the fire rows down. -->
+        <div class="ctlMain">
+        <div class="ctlRow">
         <div class="field">
           <span class="fieldLabel">PSA</span>
           <select id="fdraSelect"></select>
@@ -191,9 +196,6 @@
           <span class="fieldLabel">Year</span>
           <select id="overlayYear" class="narrow" aria-label="Year to overlay"></select>
         </div>
-        <div class="field">
-          <span class="fieldLabel">Index</span>
-          <div class="pillRow" id="indexPills" role="tablist" aria-label="Index"></div>
         </div>
         <div class="field" id="fireField" hidden>
           <span class="fieldLabel">Historical fires</span>
@@ -212,6 +214,11 @@
             <select id="growthYear" class="narrow" aria-label="Growth year"></select>
             <select id="growthCause" class="narrow" aria-label="Growth fire cause"></select>
           </div>
+        </div>
+        </div>
+        <div class="field">
+          <span class="fieldLabel">Index</span>
+          <div class="pillRow" id="indexPills" role="tablist" aria-label="Index"></div>
         </div>
       </div>
 
