@@ -263,9 +263,7 @@
           forecast lines are refreshed each run. Station roster: <span id="metaGacc">&mdash;</span>
           RAWS network (<span id="metaStationCount">&mdash;</span> stations,
           <span id="metaFdraCount">&mdash;</span> PSAs). This page's data was last
-          regenerated <span id="metaGenerated">&mdash;</span>. Internal ONCC analyst tool, not an
-          official FEMS or NWS product. Chart style based on
-          <a href="https://github.com/mpanunto/NFDRS_FEMS" target="_blank" rel="noopener">mpanunto/NFDRS_FEMS</a>.
+          regenerated <span id="metaGenerated">&mdash;</span>. Experimental product.
         </p>
         <details class="howTo" id="fireSources" hidden>
           <summary>Fire occurrence data sources</summary>
@@ -361,6 +359,9 @@
   var MONTH_LABELS_FULL = ["January", "February", "March", "April", "May", "June", "July",
     "August", "September", "October", "November", "December"];
   var GACC_KEY = "__GACC__";
+  // Revalidate data files every load (a 304 when unchanged): the ONCC site's Apache sends no
+  // Cache-Control, so browsers could otherwise keep serving yesterday's JSON from cache.
+  var NO_CACHE = { cache: "no-cache" };
 
   var els = {
     loadState: document.getElementById("loadState"),
@@ -426,7 +427,7 @@
 
   function ensureChunkLoaded(chunkKey) {
     if (chunkKey in chunkCache) return Promise.resolve(chunkCache[chunkKey]);
-    return fetch(gacc + "/data/" + chunkKey + ".json").then(function (r) {
+    return fetch(gacc + "/data/" + chunkKey + ".json", NO_CACHE).then(function (r) {
       if (!r.ok) throw new Error("HTTP " + r.status);
       return r.json();
     }).then(function (chunk) {
@@ -441,7 +442,7 @@
   function ensureYearLoaded(year, chunkKey) {
     var key = year + "/" + chunkKey;
     if (!(key in yearCache)) {
-      yearCache[key] = fetch(gacc + "/years/" + key + ".json").then(function (r) {
+      yearCache[key] = fetch(gacc + "/years/" + key + ".json", NO_CACHE).then(function (r) {
         if (r.status === 404) return { year: +year, entities: {} };
         if (!r.ok) throw new Error("HTTP " + r.status);
         return r.json();
@@ -1331,7 +1332,7 @@
 
   function loadGacc(g) {
     gacc = g;
-    return fetch(gacc + "/manifest.json").then(function (r) {
+    return fetch(gacc + "/manifest.json", NO_CACHE).then(function (r) {
       if (!r.ok) throw new Error("HTTP " + r.status);
       return r.json();
     }).then(function (data) {
@@ -1354,7 +1355,7 @@
     });
   }
 
-  fetch("gaccs.json").then(function (r) {
+  fetch("gaccs.json", NO_CACHE).then(function (r) {
     if (!r.ok) throw new Error("HTTP " + r.status);
     return r.json();
   }).then(function (gaccs) {
