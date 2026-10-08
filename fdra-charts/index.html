@@ -207,7 +207,7 @@
           </div>
         </div>
         <div class="field" id="growthField" hidden>
-          <span class="fieldLabel">Large growth days (IMSR)</span>
+          <span class="fieldLabel" id="growthFieldLabel">Large growth days (IMSR)</span>
           <div class="fireRow">
             <label class="checkRow"><input type="checkbox" id="growthShow">Show</label>
             <select id="growthMin" class="narrow" aria-label="Minimum daily growth"></select>
@@ -247,7 +247,7 @@
             <div class="legendItems" id="fireLegend"></div>
           </div>
           <div class="legendGroup" id="growthLegendGroup" hidden>
-            <span class="legendGroupTitle">Daily growth (IMSR)</span>
+            <span class="legendGroupTitle" id="growthLegendTitle">Daily growth (IMSR)</span>
             <div class="legendItems" id="growthLegend"></div>
           </div>
         </div>
@@ -309,7 +309,7 @@
             window can plot, since each dot needs an observation on its date. Station charts show
             every fire in that station's PSA. Hover a dot for the fire name(s), acreage and
             percentile.</p>
-            <p><strong>Large growth days (IMSR):</strong> each triangle is a day this PSA's
+            <p id="growthHelpImsr"><strong>Large growth days (IMSR):</strong> each triangle is a day this PSA's
             large fires (or, on the GACC chart, all of its California large fires) grew at least
             the selected acreage in total, placed at the index value observed that day, so the
             triangles show where on the percentile bands big spread days actually fell. Triangle
@@ -333,6 +333,27 @@
             complexes) counts in the PSA where most of its home unit's fires are. The
             status line below the chart gives the share of the shown days at or above the 90th
             percentile (at or below the 10th for fuel moisture).</p>
+            <p id="growthHelpSatellite" hidden><strong>Large growth days (Satellite):</strong> each
+            triangle is a day this PSA's large fires (or, on the GACC chart, all of them) grew at least
+            the selected acreage in total, placed at the index value observed that day, so the
+            triangles show where on the percentile bands big spread days actually fell. Triangle
+            size is that day's growth. Growth comes from NASA FIRMS satellite fire detections
+            (VIIRS from 2012, MODIS before), dated inside each fire's final perimeter (MTBS, or the
+            NIFC WFIGS incident perimeter for fires MTBS doesn't map, including this season): every
+            100 m of the perimeter takes the day it was first detected burning, and a day runs
+            06:00 to 06:00 local so the ~1:30 am overpass counts toward the afternoon it burned.
+            Acres are counted in the PSA they burned in, so a fire that crosses a PSA line adds
+            growth to each PSA it reached. Only fires with a perimeter of about 1,000 acres or more
+            count. Each fire's cause comes from the same fire occurrence records as the fire dots
+            (FPA FOD / InFORM); a complex takes its largest start's cause. The cause filter
+            re-totals each day from just the matching fires before the acreage threshold applies.
+            A day the fire was hidden by cloud or thick smoke has no detections, so its growth lands
+            on the next clear day. Compared with IMSR growth, the satellite day is usually a day
+            earlier: IMSR acreage tends to lag a day behind the fire. The status line below the
+            chart gives the share of the shown days at or above the 90th percentile (at or below the
+            10th for fuel moisture). We acknowledge the use of data from NASA's Fire Information for
+            Resource Management System (FIRMS), part of NASA's LANCE and ESDIS; perimeters from MTBS
+            (USGS / USDA Forest Service) and NIFC WFIGS.</p>
             <p><strong>Fire cause:</strong> a fire's popup lists its NWCG cause (PMS 910) from
             broad to narrow: Cause Classification, General Cause, Specific Cause, Specific Cause
             Detail. For example, "Human, Equipment and Vehicle Use, Trailer, Brakes". Levels with
@@ -890,7 +911,8 @@
           var names = m.fires.slice(0, FIRE_TIP_MAX_NAMES).map(function (f) {
             var cause = (f[3] || f[4]) ?
               causeText({ nwcgClass: f[3], nwcgGeneral: f[4], nwcgSpecific: f[5], nwcgDetail: f[6] }) +
-                (f[7] === "complex_members" ? " (from the complex's member fires)" : "") :
+                (f[7] === "complex_members" ? " (from the complex's member fires)" :
+                 f[7] === "largest_member" ? " (the complex's largest start)" : "") :
               "Cause not matched";
             return "<div class=\"fireEntry\"><div><span class=\"fireName\">" + escapeHtml(f[0]) + "</span> &middot; +" +
               fmtAcres(f[1]) + "</div><div class=\"fireDetail\">" + escapeHtml(cause) + "</div>" +
@@ -1013,6 +1035,13 @@
     var on = !!(g && g.thresholds && g.thresholds.length);
     els.growthField.hidden = !on;
     if (!on) return;
+    // Source label + help paragraph (fdra_charts_web_large_fire_growth_source; older exports
+    // carry no source and are IMSR).
+    var source = g.source === "Satellite" ? "Satellite" : "IMSR";
+    document.getElementById("growthFieldLabel").textContent = "Large growth days (" + source + ")";
+    document.getElementById("growthLegendTitle").textContent = "Daily growth (" + source + ")";
+    document.getElementById("growthHelpImsr").hidden = source !== "IMSR";
+    document.getElementById("growthHelpSatellite").hidden = source !== "Satellite";
     els.growthMin.innerHTML = "";
     g.thresholds.forEach(function (t) {
       var opt = document.createElement("option");
