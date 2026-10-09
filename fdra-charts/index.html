@@ -912,7 +912,8 @@
             var cause = (f[3] || f[4]) ?
               causeText({ nwcgClass: f[3], nwcgGeneral: f[4], nwcgSpecific: f[5], nwcgDetail: f[6] }) +
                 (f[7] === "complex_members" ? " (from the complex's member fires)" :
-                 f[7] === "largest_member" ? " (the complex's largest start)" : "") :
+                 (f[7] || "").indexOf("largest_member") === 0 ?
+                   " (cause of its largest start" + (f[7].length > 15 ? ", " + f[7].slice(15) : "") + ")" : "") :
               "Cause not matched";
             return "<div class=\"fireEntry\"><div><span class=\"fireName\">" + escapeHtml(f[0]) + "</span> &middot; +" +
               fmtAcres(f[1]) + "</div><div class=\"fireDetail\">" + escapeHtml(cause) + "</div>" +
