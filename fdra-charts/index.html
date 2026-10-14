@@ -184,6 +184,10 @@
              Index pills' wrapped height doesn't push the fire rows down. -->
         <div class="ctlMain">
         <div class="ctlRow">
+        <div class="field" id="gaccField" hidden>
+          <span class="fieldLabel">GACC</span>
+          <select id="gaccSelect" aria-label="Geographic Area Coordination Center"></select>
+        </div>
         <div class="field">
           <span class="fieldLabel">PSA</span>
           <select id="fdraSelect"></select>
@@ -389,6 +393,8 @@
     consoleEl: document.getElementById("console"),
     issuedSub: document.getElementById("issuedSub"),
     fdraSelect: document.getElementById("fdraSelect"),
+    gaccField: document.getElementById("gaccField"),
+    gaccSelect: document.getElementById("gaccSelect"),
     stationSelect: document.getElementById("stationSelect"),
     indexPills: document.getElementById("indexPills"),
     panelTitle: document.getElementById("panelTitle"),
@@ -1369,7 +1375,8 @@
       manifest = data;
       chunkCache = {};
       yearCache = {};
-      els.issuedSub.textContent = gacc + " · " + manifest.current_year_range.start + " to " +
+      els.issuedSub.textContent = (manifest.gacc_name ? manifest.gacc_name + " (" + gacc + ")" : gacc) +
+        " · " + manifest.current_year_range.start + " to " +
         manifest.current_year_range.forecast_through;
       populateMetaLine();
       populateFdraSelect();
@@ -1390,9 +1397,28 @@
     return r.json();
   }).then(function (gaccs) {
     if (!gaccs.length) throw new Error("gaccs.json is empty");
+    // [{id, name}] in export order (the main GACC first); bare codes before 2026-10-13.
+    gaccs = gaccs.map(function (g) { return typeof g === "string" ? { id: g, name: g } : g; });
+    var ids = gaccs.map(function (g) { return g.id; });
     var params = new URLSearchParams(window.location.search);
     var requested = params.get("gacc");
-    return loadGacc(requested && gaccs.indexOf(requested) !== -1 ? requested : gaccs[0]);
+    var chosen = requested && ids.indexOf(requested) !== -1 ? requested : ids[0];
+    if (gaccs.length > 1) {
+      gaccs.forEach(function (g) {
+        var opt = document.createElement("option");
+        opt.value = g.id;
+        opt.textContent = g.name && g.name !== g.id ? g.id + " – " + g.name : g.id;
+        els.gaccSelect.appendChild(opt);
+      });
+      els.gaccSelect.value = chosen;
+      els.gaccField.hidden = false;
+      // Switching GACC reloads with ?gacc= (a shareable link) rather than re-wiring every control.
+      els.gaccSelect.addEventListener("change", function () {
+        params.set("gacc", els.gaccSelect.value);
+        window.location.search = params.toString();
+      });
+    }
+    return loadGacc(chosen);
   }).catch(function (err) {
     els.loadState.textContent = "Could not load data (" + err.message + "). This viewer must be " +
       "served over http(s):// alongside the gaccs.json/<gacc>/manifest.json/<gacc>/data/ files " +
