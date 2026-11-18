@@ -1,1 +1,1 @@
-[{"id":"ONCC","name":"Northern California"},{"id":"OSCC","name":"Southern California"},{"id":"HI","name":"Hawaii"}]
+[{"id":"ONCC","name":"Northern California (CONUS)"},{"id":"OSCC","name":"Southern California"},{"id":"HI","name":"Hawaii"},{"id":"AS","name":"American Samoa","area":true},{"id":"GU","name":"Guam","area":true},{"id":"MP","name":"Northern Mariana Islands","area":true}]

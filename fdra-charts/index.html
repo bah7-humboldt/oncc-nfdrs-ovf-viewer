@@ -185,7 +185,7 @@
         <div class="ctlMain">
         <div class="ctlRow">
         <div class="field" id="gaccField" hidden>
-          <span class="fieldLabel">GACC</span>
+          <span class="fieldLabel" id="gaccFieldLabel">GACC</span>
           <select id="gaccSelect" aria-label="Geographic Area Coordination Center"></select>
         </div>
         <div class="field">
@@ -337,6 +337,18 @@
             complexes) counts in the PSA where most of its home unit's fires are. The
             status line below the chart gives the share of the shown days at or above the 90th
             percentile (at or below the 10th for fuel moisture).</p>
+            <p id="growthHelpFireDays" hidden><strong>Satellite fire days (Pacific Islands):</strong> each
+            triangle is a day NASA FIRMS saw vegetation fire on this island group (or, on the GACC chart,
+            any of them), placed at the index value observed that day. Triangle size is the number of
+            detections: VIIRS (375 m pixels) from 2012, MODIS (1 km) before. These are not growth days:
+            the islands have no mapped fire perimeters and only one fire on record reached 1,000 acres, so
+            detections can't be turned into acres. Satellites miss small fires and anything under cloud,
+            so read a triangle as "fire was active and big enough to see", not as a fire count. A day runs
+            06:00 to 06:00 local, so the ~1:30 am overpass counts toward the afternoon before it. Detections
+            over open water and the active volcanoes north of Saipan are left out. Fire records exist for
+            Guam only (FPA FOD 2015-2024, InFORM since); CNMI and American Samoa have none. We acknowledge
+            the use of data from NASA's Fire Information for Resource Management System (FIRMS), part of
+            NASA's LANCE and ESDIS.</p>
             <p id="growthHelpSatellite" hidden><strong>Large growth days (Satellite):</strong> each
             triangle is a day this PSA's large fires (or, on the GACC chart, all of them) grew at least
             the selected acreage in total, placed at the index value observed that day, so the
@@ -443,8 +455,18 @@
   var FIRE_CLASS_RADIUS = { A: 1.5, B: 2, C: 2.8, D: 3.8, E: 5, F: 6.5, G: 8.5 };
   var FIRE_DEFAULT_RADIUS = 2.4;
   var FIRE_TIP_MAX_NAMES = 10;
-  // Growth triangle half-width: 3 at 1,000 ac/day, +2.5 per tenfold, capped.
-  function growthRadius(acres) { return Math.min(9.5, 3 + 2.5 * Math.log(Math.max(acres, 1000) / 1000) / Math.LN10); }
+  // Growth triangle half-width: 3 at 1,000 ac/day, +2.5 per tenfold, capped. growthBase is the
+  // smallest dropdown value instead when the overlay counts something other than acres (the
+  // Pacific Islands' satellite fire days count detections; manifest.growth.unit).
+  var growthBase = 1000;
+  function growthRadius(acres) { return Math.min(9.5, 3 + 2.5 * Math.log(Math.max(acres, growthBase) / growthBase) / Math.LN10); }
+  function growthIsDetections() { return !!(manifest && manifest.growth && manifest.growth.unit === "detections"); }
+  // "12,000 ac" / "12 detections"
+  function fmtGrowth(n) {
+    if (!growthIsDetections()) return fmtAcres(n);
+    return Math.round(n).toLocaleString() + (Math.round(n) === 1 ? " detection" : " detections");
+  }
+  function growthUnitPerDay() { return growthIsDetections() ? " detections/day" : " ac/day"; }
   function trianglePoints(x, y, r) {
     return x + "," + (y - r * 1.15) + " " + (x - r) + "," + (y + r * 0.6) + " " + (x + r) + "," + (y + r * 0.6);
   }
@@ -921,13 +943,17 @@
                  (f[7] || "").indexOf("largest_member") === 0 ?
                    " (cause of its largest start" + (f[7].length > 15 ? ", " + f[7].slice(15) : "") + ")" : "") :
               "Cause not matched";
+            if (growthIsDetections()) return "<div class=\"fireEntry\"><div><span class=\"fireName\">" + escapeHtml(f[0]) + "</span></div></div>";
             return "<div class=\"fireEntry\"><div><span class=\"fireName\">" + escapeHtml(f[0]) + "</span> &middot; +" +
               fmtAcres(f[1]) + "</div><div class=\"fireDetail\">" + escapeHtml(cause) + "</div>" +
               (state.fdraId === GACC_KEY ? "<div class=\"fireDetail\">" + escapeHtml(psaText(f[2])) + "</div>" : "") + "</div>";
           });
           if (m.fires.length > FIRE_TIP_MAX_NAMES) names.push("<div>+" + (m.fires.length - FIRE_TIP_MAX_NAMES) + " more</div>");
-          tip.innerHTML = "<div class=\"hoverDate\">" + isoToLabel(m.date) + " &middot; +" + fmtAcres(m.acres) +
-            " growth" + (m.fires.length > 1 ? " (" + m.fires.length + " fires)" : "") + "</div>" + names.join("") +
+          tip.innerHTML = "<div class=\"hoverDate\">" + isoToLabel(m.date) + " &middot; " +
+            (growthIsDetections() ? "satellite fire day, " + fmtGrowth(m.acres) +
+              (m.fires.length > 1 ? " (" + m.fires.length + " island groups)" : "") :
+              "+" + fmtAcres(m.acres) + " growth" + (m.fires.length > 1 ? " (" + m.fires.length + " fires)" : "")) +
+            "</div>" + names.join("") +
             "<div>" + tipRow("Burn day", m.value) + "</div>" +
             (lag ? "<div class=\"fireDetail\">From the IMSR of " + isoToLabel(addDaysIso(m.date, lag)) + "</div>" : "");
           tip.classList.add("fireTip");
@@ -1033,7 +1059,7 @@
       tri.className = "legendSwatchTri";
       tri.style.borderWidth = "0 " + r + "px " + (1.75 * r) + "px " + r + "px";
       item.appendChild(tri);
-      item.appendChild(document.createTextNode(a.toLocaleString() + " ac/day"));
+      item.appendChild(document.createTextNode(a.toLocaleString() + growthUnitPerDay()));
       els.growthLegend.appendChild(item);
     });
   }
@@ -1044,15 +1070,20 @@
     if (!on) return;
     // Source label + help paragraph (fdra_charts_web_large_fire_growth_source; older exports
     // carry no source and are IMSR).
-    var source = g.source === "Satellite" ? "Satellite" : "IMSR";
-    document.getElementById("growthFieldLabel").textContent = "Large growth days (" + source + ")";
-    document.getElementById("growthLegendTitle").textContent = "Daily growth (" + source + ")";
+    var source = g.source === "Satellite" || g.source === "SatelliteFireDays" ? g.source : "IMSR";
+    var fireDays = source === "SatelliteFireDays";
+    growthBase = fireDays ? g.thresholds[0] : 1000;
+    document.getElementById("growthFieldLabel").textContent = fireDays ? "Satellite fire days" : "Large growth days (" + source + ")";
+    document.getElementById("growthLegendTitle").textContent = fireDays ? "Satellite fire detections" : "Daily growth (" + source + ")";
     document.getElementById("growthHelpImsr").hidden = source !== "IMSR";
     document.getElementById("growthHelpSatellite").hidden = source !== "Satellite";
+    document.getElementById("growthHelpFireDays").hidden = !fireDays;
+    // Fire days have no fire records behind them, so no cause to filter on.
+    els.growthCause.hidden = fireDays;
     els.growthMin.innerHTML = "";
     g.thresholds.forEach(function (t) {
       var opt = document.createElement("option");
-      opt.value = String(t); opt.textContent = t.toLocaleString() + "+ ac/day";
+      opt.value = String(t); opt.textContent = t.toLocaleString() + "+" + growthUnitPerDay();
       els.growthMin.appendChild(opt);
     });
     // Default to 5,000 ac/day (the threshold analysis's headline cut) when offered.
@@ -1210,7 +1241,7 @@
   function populateFdraSelect() {
     els.fdraSelect.innerHTML = "";
     var gaccOpt = document.createElement("option");
-    gaccOpt.value = GACC_KEY; gaccOpt.textContent = gacc + " (GACC-wide)";
+    gaccOpt.value = GACC_KEY; gaccOpt.textContent = gacc + (manifest.area ? " (area-wide)" : " (GACC-wide)");
     els.fdraSelect.appendChild(gaccOpt);
     manifest.fdras.forEach(function (f) {
       var opt = document.createElement("option");
@@ -1303,7 +1334,7 @@
       updateLineLegend();
       els.panelTitle.textContent = entity.name + " — " + (manifest.index_labels[state.index] || state.index);
       els.panelSub.textContent = (entity.level === "station" ? "Station (PSA " + entity.fdra + ")" :
-        entity.level === "fdra" ? "PSA rollup" : "GACC-wide rollup") +
+        entity.level === "fdra" ? "PSA rollup" : (manifest.area ? "Area-wide rollup" : "GACC-wide rollup")) +
         (entity.record ? " \u00b7 Period of record " + recordLabel(entity.record) : "");
       var fireGroups = (manifest.fires && state.fireShow && chunk.fires && series && series.fire_values) ?
         buildFireGroups(chunk.fires, series.fire_values) : null;
@@ -1329,9 +1360,12 @@
         "forecast through " + manifest.current_year_range.forecast_through + ".") +
         (fireGroups ? " " + fireCount(fireGroups).toLocaleString() + " fire(s) shown (Class " + state.fireMinClass +
           "+, " + (state.fireYear === "all" ? "all years" : state.fireYear) + ", " + causeFilterLabel() + ")." : "") +
-        (growthMarks ? " " + growthMarks.length.toLocaleString() + " large-growth day(s) shown (" +
-          state.growthMin.toLocaleString() + "+ ac, " + (state.growthYear === "all" ? "all years" : state.growthYear) +
-          ", " + growthCauseLabel() + ");" + (growthMarks.length ? growthPercentileSummary(growthMarks, series) : "") : "");
+        (growthMarks ? " " + growthMarks.length.toLocaleString() +
+          (growthIsDetections() ? " satellite fire day(s) shown (" + state.growthMin.toLocaleString() + "+ detections, " +
+             (state.growthYear === "all" ? "all years" : state.growthYear) + ");" :
+           " large-growth day(s) shown (" + state.growthMin.toLocaleString() + "+ ac, " +
+             (state.growthYear === "all" ? "all years" : state.growthYear) + ", " + growthCauseLabel() + ");") +
+          (growthMarks.length ? growthPercentileSummary(growthMarks, series) : "") : "");
     }).catch(function (err) {
       els.statusBar.textContent = "Could not load " + (pastYear ? pastYear + "/" : "") + chunkKey + ".json: " + err.message;
     });
@@ -1412,6 +1446,8 @@
       });
       els.gaccSelect.value = chosen;
       els.gaccField.hidden = false;
+      // Areas under a GACC (the Pacific islands under ONCC) share the picker.
+      if (gaccs.some(function (g) { return g.area; })) document.getElementById("gaccFieldLabel").textContent = "GACC/Area";
       // Switching GACC reloads with ?gacc= (a shareable link) rather than re-wiring every control.
       els.gaccSelect.addEventListener("change", function () {
         params.set("gacc", els.gaccSelect.value);
